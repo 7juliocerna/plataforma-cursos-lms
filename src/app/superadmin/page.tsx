@@ -10,14 +10,20 @@ import {
   Building2,
   Check,
   CheckCircle2,
+  CheckSquare,
+  ChevronDown,
+  ChevronRight,
   Clock,
   CreditCard,
   Crown,
   ExternalLink,
   Eye,
   Filter,
+  Folder,
   FolderKanban,
+  FolderOpen,
   FolderPlus,
+  FolderTree,
   GraduationCap,
   Layers,
   Pencil,
@@ -25,12 +31,27 @@ import {
   RefreshCw,
   Search,
   Sparkles,
+  Square,
   Trash2,
   Users,
   Video,
   Wand2,
   X,
 } from 'lucide-react';
+
+interface BunnyCollection {
+  guid: string;
+  name: string;
+  videoCount: number;
+}
+
+interface FolderNode {
+  id: string;
+  name: string;
+  totalVideos: number;
+  unassignedVideos: number;
+  videos: BunnyRemoteVideo[];
+}
 
 export default function SuperAdminDashboardPage() {
   const router = useRouter();
@@ -98,11 +119,15 @@ export default function SuperAdminDashboardPage() {
   const [pickerModuleId, setPickerModuleId] = useState<string | null>(null);
   const [checkedBunnyGuids, setCheckedBunnyGuids] = useState<string[]>([]);
 
-  // Videos traídos en vivo desde Bunny.net Stream (#808934)
+  // Videos y Carpetas (Colecciones) traídos en vivo desde Bunny.net Stream (#808934)
   const [bunnyVideos, setBunnyVideos] = useState<BunnyRemoteVideo[]>([]);
+  const [bunnyCollections, setBunnyCollections] = useState<BunnyCollection[]>([]);
   const [loadingBunny, setLoadingBunny] = useState(false);
 
-  // Buscador y Filtro para la Bandeja de Videos de Bunny
+  // ÁRBOL DE CARPETAS DE BUNNY: Estado de navegación y filtros
+  const [selectedFolderId, setSelectedFolderId] = useState<string>('ALL'); // 'ALL' o GUID de colección
+  const [treeViewMode, setTreeViewMode] = useState<'tree' | 'focused'>('tree');
+  const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
   const [bunnySearchQuery, setBunnySearchQuery] = useState('');
   const [bunnyFilterTab, setBunnyFilterTab] = useState<'unassigned' | 'all'>('unassigned');
   const [batchTargetModuleId, setBatchTargetModuleId] = useState<string>('');
@@ -127,20 +152,32 @@ export default function SuperAdminDashboardPage() {
   const [newAcademyPriceMonthly, setNewAcademyPriceMonthly] = useState(19);
   const [newAcademyPriceAnnual, setNewAcademyPriceAnnual] = useState(149);
 
-  // Cargar automáticamente la lista de videos de Bunny al entrar al panel
+  // Cargar automáticamente la lista de videos y carpetas de Bunny al entrar al panel
   const fetchBunnyLibrary = async () => {
     setLoadingBunny(true);
     try {
       const res = await fetch('/api/bunny/videos');
       const data = await res.json();
-      if (data.ok && Array.isArray(data.videos)) {
-        const sortedVideos = [...data.videos].sort((a, b) =>
-          String(a.title || '').localeCompare(String(b.title || ''), 'es', {
-            numeric: true,
-            sensitivity: 'base',
-          })
-        );
-        setBunnyVideos(sortedVideos);
+      if (data.ok) {
+        if (Array.isArray(data.collections)) {
+          setBunnyCollections(data.collections);
+          // Expandir todas las carpetas por defecto en la vista de árbol
+          const initialExpanded: Record<string, boolean> = { ROOT: true };
+          data.collections.forEach((c: BunnyCollection) => {
+            initialExpanded[c.guid] = true;
+          });
+          setExpandedFolders(initialExpanded);
+        }
+
+        if (Array.isArray(data.videos)) {
+          const sortedVideos = [...data.videos].sort((a, b) =>
+            String(a.title || '').localeCompare(String(b.title || ''), 'es', {
+              numeric: true,
+              sensitivity: 'base',
+            })
+          );
+          setBunnyVideos(sortedVideos);
+        }
       }
     } catch {
       // Ignorar si no hay red
@@ -198,6 +235,33 @@ export default function SuperAdminDashboardPage() {
     if (!activeCourse || !targetModId) return;
     const res = assignBunnyVideosToSubtema(activeCourse.id, targetModId, [video]);
     setBannerMsg(res.message);
+  };
+
+  // Asignar TODOS los videos de una carpeta específica a un tema con 1 clic
+  const handleAssignFolderVideosToModule = (
+    folderVideos: BunnyRemoteVideo[],
+    targetModId: string,
+    onlyUnassigned: boolean = true
+  ) => {
+    if (!activeCourse || !targetModId) return;
+    const toAssign = onlyUnassigned
+      ? folderVideos.filter((v) => !allAssignedVideoGuids.has(v.guid))
+      : folderVideos;
+
+    if (toAssign.length === 0) {
+      setBannerMsg('No hay videos pendientes de asignar en esta carpeta.');
+      return;
+    }
+
+    const sorted = [...toAssign].sort((a, b) =>
+      a.title.localeCompare(b.title, 'es', {
+        numeric: true,
+        sensitivity: 'base',
+      })
+    );
+
+    const res = assignBunnyVideosToSubtema(activeCourse.id, targetModId, sorted);
+    setBannerMsg(`¡Éxito! ${toAssign.length} video(s) de la carpeta asignados a "${activeCourse.modules.find(m => m.id === targetModId)?.title}".`);
   };
 
   // Envío del Wizard de Creación de Curso
@@ -324,17 +388,113 @@ export default function SuperAdminDashboardPage() {
       );
   }, [bunnyVideos, allAssignedVideoGuids]);
 
-  // Lista filtrada según búsqueda y tab seleccionado
-  const filteredBunnyVideos = useMemo(() => {
-    const baseList = bunnyFilterTab === 'unassigned' ? unassignedBunnyVideos : bunnyVideos;
-    if (!bunnySearchQuery.trim()) return baseList;
-    const q = bunnySearchQuery.toLowerCase();
-    return baseList.filter(
-      (v) =>
-        v.title.toLowerCase().includes(q) ||
-        v.guid.toLowerCase().includes(q)
+  // =========================================================================
+  // CONSTRUCCIÓN DEL ÁRBOL DE CARPETAS DE BUNNY STREAM (#808934)
+  // Agrupa los 79 videos exactamente por sus carpetas reales para que
+  // ningún curso ni video se mezcle.
+  // =========================================================================
+  const folderNodes = useMemo<FolderNode[]>(() => {
+    const groupMap = new Map<string, BunnyRemoteVideo[]>();
+    const rootVideos: BunnyRemoteVideo[] = [];
+
+    for (const v of bunnyVideos) {
+      if (v.collectionId) {
+        const list = groupMap.get(v.collectionId) || [];
+        list.push(v);
+        groupMap.set(v.collectionId, list);
+      } else {
+        rootVideos.push(v);
+      }
+    }
+
+    const nodes: FolderNode[] = [];
+
+    // Carpetas registradas en Bunny
+    for (const col of bunnyCollections) {
+      const vids = groupMap.get(col.guid) || [];
+      const unassigned = vids.filter((v) => !allAssignedVideoGuids.has(v.guid)).length;
+      nodes.push({
+        id: col.guid,
+        name: col.name,
+        totalVideos: vids.length,
+        unassignedVideos: unassigned,
+        videos: vids,
+      });
+    }
+
+    // Colecciones adicionales encontradas en videos si las hubiera
+    groupMap.forEach((vids, colId) => {
+      if (!bunnyCollections.some((c) => c.guid === colId)) {
+        const colName = vids[0]?.collectionName || 'Carpeta sin nombre';
+        const unassigned = vids.filter((v) => !allAssignedVideoGuids.has(v.guid)).length;
+        nodes.push({
+          id: colId,
+          name: colName,
+          totalVideos: vids.length,
+          unassignedVideos: unassigned,
+          videos: vids,
+        });
+      }
+    });
+
+    // Videos en raíz / sin carpeta
+    if (rootVideos.length > 0) {
+      const unassigned = rootVideos.filter((v) => !allAssignedVideoGuids.has(v.guid)).length;
+      nodes.push({
+        id: 'ROOT',
+        name: 'Videos sin carpeta (Raíz de Bunny)',
+        totalVideos: rootVideos.length,
+        unassignedVideos: unassigned,
+        videos: rootVideos,
+      });
+    }
+
+    // Ordenar carpetas alfabética y numéricamente
+    return nodes.sort((a, b) =>
+      a.name.localeCompare(b.name, 'es', { numeric: true, sensitivity: 'base' })
     );
-  }, [bunnyFilterTab, unassignedBunnyVideos, bunnyVideos, bunnySearchQuery]);
+  }, [bunnyVideos, bunnyCollections, allAssignedVideoGuids]);
+
+  // Filtrado de nodos y videos según la carpeta seleccionada y búsqueda
+  const filteredFolderNodes = useMemo(() => {
+    let baseNodes = folderNodes;
+
+    // Si hay una carpeta seleccionada específica, solo mostramos esa carpeta
+    if (selectedFolderId !== 'ALL') {
+      baseNodes = baseNodes.filter((node) => node.id === selectedFolderId);
+    }
+
+    // Filtrar videos dentro de cada nodo según el filtro (Sueltos vs Todos) y la búsqueda
+    return baseNodes
+      .map((node) => {
+        let nodeVideos = node.videos;
+
+        if (bunnyFilterTab === 'unassigned') {
+          nodeVideos = nodeVideos.filter((v) => !allAssignedVideoGuids.has(v.guid));
+        }
+
+        if (bunnySearchQuery.trim()) {
+          const q = bunnySearchQuery.toLowerCase();
+          nodeVideos = nodeVideos.filter(
+            (v) =>
+              v.title.toLowerCase().includes(q) ||
+              v.guid.toLowerCase().includes(q)
+          );
+        }
+
+        return {
+          ...node,
+          videos: nodeVideos,
+        };
+      })
+      .filter((node) => {
+        // En búsqueda activa o filtro sueltos, solo mostramos carpetas que tengan videos coincidentes
+        if (bunnySearchQuery.trim()) {
+          return node.videos.length > 0;
+        }
+        return true;
+      });
+  }, [folderNodes, selectedFolderId, bunnyFilterTab, bunnySearchQuery, allAssignedVideoGuids]);
 
   // Calcula el número correlativo de cada Subtema (0 si es subtema zero)
   const getSubtemaNumber = (
@@ -360,6 +520,13 @@ export default function SuperAdminDashboardPage() {
     );
   }, [activeCourse, academies]);
 
+  const toggleFolderExpansion = (folderId: string) => {
+    setExpandedFolders((prev) => ({
+      ...prev,
+      [folderId]: !prev[folderId],
+    }));
+  };
+
   return (
     <div className="mx-auto max-w-7xl px-4 py-8">
       {/* =====================================================================
@@ -369,13 +536,13 @@ export default function SuperAdminDashboardPage() {
         <div>
           <div className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-bold text-blue-900">
             <Crown className="h-3.5 w-3.5 text-blue-700" />
-            ADMINISTRADOR • CONSTRUCTOR DE CURSOS & BIBLIOTECA BUNNY
+            ADMINISTRADOR • CONSTRUCTOR DE CURSOS & ÁRBOL DE BUNNY STREAM
           </div>
           <h1 className="mt-2.5 text-2xl font-extrabold text-[#1E293B] sm:text-3xl">
-            Gestor de Cursos y Temarios Multimedia
+            Gestor de Cursos & Árbol de Videos por Carpetas
           </h1>
           <p className="mt-1 text-xs sm:text-sm text-[#64748B]">
-            Crea cursos con asistentes guiados, estructura módulos ilimitados y distribuye tus <strong>79 videos de Bunny Stream</strong> con un solo clic.
+            Navega tus videos organizados por las <strong>Carpetas reales de Bunny Stream</strong> sin que se mezclen cursos, y asigna módulos completos con un clic.
           </p>
         </div>
 
@@ -760,7 +927,7 @@ export default function SuperAdminDashboardPage() {
                     </div>
 
                     <div className="rounded-2xl border border-blue-200 bg-blue-50/70 p-3.5 text-xs text-blue-900">
-                      💡 <strong>Tip Bunny Stream:</strong> Una vez creado el curso, podrás buscar entre tus 79 videos en la columna derecha y enviarlos a cualquiera de estos temas con un solo clic.
+                      💡 <strong>Tip Bunny Stream:</strong> Gracias al nuevo Árbol de Carpetas, podrás ver los videos de cada curso por separado sin que se mezclen entre sí.
                     </div>
 
                     <div className="mt-6 flex justify-between border-t border-[#E2E8F0] pt-4">
@@ -787,7 +954,7 @@ export default function SuperAdminDashboardPage() {
           {/* =================================================================
               ÁREA PRINCIPAL DE TRABAJO (2 COLUMNAS ERGONÓMICAS):
               Izquierda (7 cols): Constructor de Temas del Curso Activo
-              Derecha (5 cols): Bandeja de Videos de Bunny Stream (#808934)
+              Derecha (5 cols): Árbol de Videos por Carpetas de Bunny Stream
           ================================================================= */}
           <div className="grid gap-8 lg:grid-cols-12">
             {/* ===============================================================
@@ -1180,9 +1347,16 @@ export default function SuperAdminDashboardPage() {
                                             {bv.title.replace(/\.mp4$/i, '')}
                                           </span>
                                         </div>
-                                        <span className="rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[10px] font-bold text-amber-800">
-                                          Suelto
-                                        </span>
+                                        <div className="flex items-center gap-2">
+                                          {bv.collectionName && (
+                                            <span className="rounded-md bg-blue-50 border border-blue-200 px-1.5 py-0.5 text-[9px] font-bold text-blue-700">
+                                              📁 {bv.collectionName}
+                                            </span>
+                                          )}
+                                          <span className="rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[10px] font-bold text-amber-800">
+                                            Suelto
+                                          </span>
+                                        </div>
                                       </label>
                                     );
                                   })}
@@ -1206,11 +1380,7 @@ export default function SuperAdminDashboardPage() {
                         {/* Lista de Clases asignadas al Tema */}
                         {mod.lessons.length === 0 ? (
                           <div className="mt-4 rounded-xl border border-dashed border-[#E2E8F0] p-4 text-center text-xs text-[#64748B]">
-                            Este tema aún no tiene videos. Haz clic en{' '}
-                            <strong className="text-blue-600">
-                              &ldquo;+ Meter videos de Bunny&rdquo;
-                            </strong>{' '}
-                            o usa la bandeja de la derecha para asignarlos en 1 clic.
+                            Este tema aún no tiene videos. Selecciona una carpeta a la derecha para asignar videos directamente.
                           </div>
                         ) : (
                           <ul className="mt-3.5 space-y-2">
@@ -1362,18 +1532,19 @@ export default function SuperAdminDashboardPage() {
             </div>
 
             {/* ===============================================================
-                COLUMNA DERECHA (5 COLS): BANDEJA INTELIGENTE DE BUNNY STREAM
+                COLUMNA DERECHA (5 COLS): ÁRBOL DE VIDEOS POR CARPETAS (BUNNY)
             =============================================================== */}
             <div className="space-y-6 lg:col-span-5">
               <div className="sticky top-24 rounded-3xl border border-[#E2E8F0] bg-white p-6 shadow-xs">
-                {/* Cabecera Bunny */}
+                {/* Cabecera Bunny con Biblioteca */}
                 <div className="flex items-center justify-between gap-2 border-b border-[#E2E8F0] pb-4">
                   <div>
-                    <span className="text-[11px] font-extrabold uppercase tracking-wider text-blue-700">
-                      Bunny.net Stream (#808934)
-                    </span>
+                    <div className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-blue-700">
+                      <FolderTree className="h-3.5 w-3.5" />
+                      Árbol de Carpetas Bunny (#808934)
+                    </div>
                     <h3 className="text-base font-extrabold text-[#1E293B]">
-                      Biblioteca de Videos ({bunnyVideos.length})
+                      {folderNodes.length} Carpetas • {bunnyVideos.length} Videos
                     </h3>
                   </div>
 
@@ -1382,24 +1553,80 @@ export default function SuperAdminDashboardPage() {
                     onClick={fetchBunnyLibrary}
                     disabled={loadingBunny}
                     className="inline-flex items-center gap-1.5 rounded-xl border border-[#E2E8F0] bg-white px-3 py-1.5 text-xs font-bold text-[#1E293B] hover:bg-[#F8FAFC] disabled:opacity-50 shadow-xs"
-                    title="Actualizar videos desde Bunny.net"
+                    title="Actualizar videos y carpetas desde Bunny.net"
                   >
                     <RefreshCw
                       className={`h-3.5 w-3.5 text-blue-600 ${loadingBunny ? 'animate-spin' : ''}`}
                     />
-                    <span>Buscar Nuevos</span>
+                    <span>Actualizar</span>
                   </button>
                 </div>
 
-                {/* BUSCADOR EN VIVO DE VIDEOS */}
-                <div className="mt-4">
+                {/* SELECTOR DESPLEGABLE DE CARPETA (AISLAMIENTO TOTAL ENTRE CURSOS) */}
+                <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50/50 p-3.5">
+                  <label className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-blue-900">
+                    <Folder className="h-3.5 w-3.5 text-blue-600" />
+                    1. Elige la Carpeta de Bunny que quieres trabajar:
+                  </label>
+                  <select
+                    value={selectedFolderId}
+                    onChange={(e) => setSelectedFolderId(e.target.value)}
+                    className="mt-1.5 w-full rounded-xl border border-[#E2E8F0] bg-white px-3 py-2 text-xs font-bold text-[#1E293B] shadow-xs focus:border-blue-600 focus:outline-none"
+                  >
+                    <option value="ALL">
+                      🗂️ Ver todas las carpetas ({folderNodes.length} carpetas • {bunnyVideos.length} videos)
+                    </option>
+                    {folderNodes.map((fn) => (
+                      <option key={fn.id} value={fn.id}>
+                        📁 {fn.name} ({fn.totalVideos} videos • {fn.unassignedVideos} sueltos)
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Selector rápido tipo pills de carpetas para acceso inmediato */}
+                  <div className="mt-2.5 flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFolderId('ALL')}
+                      className={`rounded-lg px-2.5 py-1 text-[11px] font-bold transition ${
+                        selectedFolderId === 'ALL'
+                          ? 'bg-blue-600 text-white shadow-xs'
+                          : 'border border-[#E2E8F0] bg-white text-[#64748B] hover:bg-[#F8FAFC]'
+                      }`}
+                    >
+                      Todas ({bunnyVideos.length})
+                    </button>
+                    {folderNodes.map((fn) => (
+                      <button
+                        key={fn.id}
+                        type="button"
+                        onClick={() => setSelectedFolderId(fn.id)}
+                        className={`rounded-lg px-2.5 py-1 text-[11px] font-bold transition ${
+                          selectedFolderId === fn.id
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : 'border border-[#E2E8F0] bg-white text-[#1E293B] hover:bg-[#F8FAFC]'
+                        }`}
+                        title={`${fn.name} (${fn.totalVideos} videos)`}
+                      >
+                        📁 {fn.name.length > 20 ? fn.name.slice(0, 18) + '…' : fn.name} ({fn.totalVideos})
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* BUSCADOR EN VIVO DE VIDEOS (DENTRO DE LA CARPETA SELECCIONADA) */}
+                <div className="mt-3">
                   <div className="relative">
                     <Search className="absolute left-3.5 top-3 h-4 w-4 text-[#64748B]" />
                     <input
                       type="text"
                       value={bunnySearchQuery}
                       onChange={(e) => setBunnySearchQuery(e.target.value)}
-                      placeholder="Buscar por nombre o número (ej: fusión, 01, máscara)..."
+                      placeholder={
+                        selectedFolderId === 'ALL'
+                          ? 'Buscar en todas las carpetas (ej: fusión, 01)...'
+                          : 'Buscar dentro de esta carpeta...'
+                      }
                       className="w-full rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] pl-10 pr-4 py-2 text-xs font-medium text-[#1E293B] placeholder-slate-400 focus:border-blue-600 focus:bg-white focus:outline-none"
                     />
                     {bunnySearchQuery && (
@@ -1415,36 +1642,56 @@ export default function SuperAdminDashboardPage() {
                 </div>
 
                 {/* TABS DE FILTRO: SUELTOS VS TODOS */}
-                <div className="mt-3 flex gap-2 border-b border-[#E2E8F0] pb-3">
+                <div className="mt-3 flex items-center justify-between border-b border-[#E2E8F0] pb-3">
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setBunnyFilterTab('unassigned')}
+                      className={`rounded-lg px-2.5 py-1 text-xs font-bold transition ${
+                        bunnyFilterTab === 'unassigned'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-[#F8FAFC] text-[#64748B] hover:text-[#1E293B]'
+                      }`}
+                    >
+                      Sueltos ({unassignedBunnyVideos.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBunnyFilterTab('all')}
+                      className={`rounded-lg px-2.5 py-1 text-xs font-bold transition ${
+                        bunnyFilterTab === 'all'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-[#F8FAFC] text-[#64748B] hover:text-[#1E293B]'
+                      }`}
+                    >
+                      Todos ({bunnyVideos.length})
+                    </button>
+                  </div>
+
+                  {/* Toggle expandir / contraer todo el árbol */}
                   <button
                     type="button"
-                    onClick={() => setBunnyFilterTab('unassigned')}
-                    className={`rounded-lg px-3 py-1 text-xs font-bold transition ${
-                      bunnyFilterTab === 'unassigned'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-[#F8FAFC] text-[#64748B] hover:text-[#1E293B]'
-                    }`}
+                    onClick={() => {
+                      const allExp = Object.values(expandedFolders).every(Boolean);
+                      const nextState: Record<string, boolean> = {};
+                      folderNodes.forEach((fn) => {
+                        nextState[fn.id] = !allExp;
+                      });
+                      setExpandedFolders(nextState);
+                    }}
+                    className="text-[11px] font-semibold text-blue-600 hover:underline"
                   >
-                    Sueltos / Sin Asignar ({unassignedBunnyVideos.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBunnyFilterTab('all')}
-                    className={`rounded-lg px-3 py-1 text-xs font-bold transition ${
-                      bunnyFilterTab === 'all'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-[#F8FAFC] text-[#64748B] hover:text-[#1E293B]'
-                    }`}
-                  >
-                    Todos ({bunnyVideos.length})
+                    {Object.values(expandedFolders).every(Boolean)
+                      ? 'Contraer carpetas'
+                      : 'Expandir carpetas'}
                   </button>
                 </div>
 
                 {/* BARRA DE ASIGNACIÓN RÁPIDA POR LOTES */}
                 {checkedBunnyGuids.length > 0 && (
-                  <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50 p-3">
+                  <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50 p-3 shadow-xs">
                     <div className="flex items-center justify-between text-xs font-bold text-blue-900">
-                      <span>{checkedBunnyGuids.length} videos seleccionados:</span>
+                      <span>{checkedBunnyGuids.length} videos marcados:</span>
                       <button
                         type="button"
                         onClick={() => setCheckedBunnyGuids([])}
@@ -1482,107 +1729,222 @@ export default function SuperAdminDashboardPage() {
                   </div>
                 )}
 
-                {/* LISTADO DE VIDEOS DE BUNNY STREAM */}
-                {filteredBunnyVideos.length === 0 ? (
-                  <div className="mt-5 rounded-2xl border border-dashed border-[#E2E8F0] p-6 text-center">
-                    <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-500" />
-                    <div className="mt-2 text-sm font-bold text-[#1E293B]">
-                      {bunnySearchQuery
-                        ? 'No se encontraron videos con ese término'
-                        : '¡Todos tus videos ya están organizados en Temas!'}
+                {/* =============================================================
+                    ÁRBOL DE CARPETAS Y VIDEOS (TREE VIEW)
+                ============================================================= */}
+                <div className="mt-3.5 max-h-[520px] space-y-3.5 overflow-y-auto pr-1">
+                  {filteredFolderNodes.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-[#E2E8F0] p-6 text-center">
+                      <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-500" />
+                      <div className="mt-2 text-sm font-bold text-[#1E293B]">
+                        No hay videos en esta vista
+                      </div>
+                      <p className="mt-1 text-xs text-[#64748B]">
+                        Prueba seleccionando &ldquo;Todas las carpetas&rdquo; o limpiando la búsqueda.
+                      </p>
                     </div>
-                    <p className="mt-1 text-xs text-[#64748B]">
-                      {bunnySearchQuery
-                        ? 'Prueba con otra palabra clave o limpia el buscador.'
-                        : `Tienes ${bunnyVideos.length} videos en tu cuenta de Bunny y todos están repartidos en cursos.`}
-                    </p>
-                  </div>
-                ) : (
-                  <div className="mt-3.5 max-h-[500px] space-y-2 overflow-y-auto pr-1">
-                    {filteredBunnyVideos.map((bv, bvIdx) => {
-                      const placement = videoPlacementMap.get(bv.guid);
-                      const isChecked = checkedBunnyGuids.includes(bv.guid);
+                  ) : (
+                    filteredFolderNodes.map((folder) => {
+                      const isExpanded = expandedFolders[folder.id] ?? true;
+                      const allFolderGuids = folder.videos.map((v) => v.guid);
+                      const isEntireFolderChecked =
+                        allFolderGuids.length > 0 &&
+                        allFolderGuids.every((g) => checkedBunnyGuids.includes(g));
 
                       return (
                         <div
-                          key={bv.guid}
-                          className={`rounded-xl border p-3 transition ${
-                            placement
-                              ? 'border-[#E2E8F0] bg-white'
-                              : 'border-amber-200 bg-amber-50/30'
-                          }`}
+                          key={folder.id}
+                          className="rounded-2xl border border-[#E2E8F0] bg-white shadow-xs overflow-hidden"
                         >
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex items-center gap-2">
-                              <input
-                                type="checkbox"
-                                checked={isChecked}
-                                onChange={(e) => {
-                                  if (e.target.checked) {
-                                    setCheckedBunnyGuids((prev) => [...prev, bv.guid]);
-                                  } else {
-                                    setCheckedBunnyGuids((prev) =>
-                                      prev.filter((id) => id !== bv.guid)
-                                    );
-                                  }
-                                }}
-                                className="h-3.5 w-3.5 rounded accent-blue-600"
-                              />
-                              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-[#64748B]">
-                                #{bvIdx + 1}
-                              </span>
-                              <span className="text-xs font-bold text-[#1E293B] line-clamp-1">
-                                {bv.title.replace(/\.mp4$/i, '')}
-                              </span>
-                            </div>
-
-                            {placement ? (
-                              <span
-                                className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                                  placement.isCurrentCourse
-                                    ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                                    : 'bg-slate-100 text-[#64748B]'
-                                }`}
-                                title={`Ubicado en: ${placement.courseTitle} → ${placement.moduleTitle}`}
-                              >
-                                {placement.isCurrentCourse ? 'En este curso' : 'Otro curso'}
-                              </span>
-                            ) : (
-                              <span className="shrink-0 rounded-full bg-amber-100 border border-amber-200 px-2 py-0.5 text-[10px] font-bold text-amber-900">
-                                Suelto
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Selector rápido para enviar este video a un tema del curso activo */}
-                          <div className="mt-2.5 flex items-center justify-between gap-2">
-                            <span className="text-[11px] font-medium text-[#64748B]">
-                              Enviar a:
-                            </span>
-                            <select
-                              aria-label="Asignar video suelto a un tema"
-                              value=""
-                              onChange={(e) => {
-                                const targetModId = e.target.value;
-                                if (targetModId) handleAssignSingleVideo(bv, targetModId);
-                              }}
-                              className="flex-1 rounded-lg border border-[#E2E8F0] bg-white px-2.5 py-1 text-xs font-medium text-[#1E293B] focus:border-blue-600 focus:outline-none"
+                          {/* NODO DE CARPETA (RAMA DEL ÁRBOL) */}
+                          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E2E8F0] bg-[#F8FAFC] px-3.5 py-2.5">
+                            <button
+                              type="button"
+                              onClick={() => toggleFolderExpansion(folder.id)}
+                              className="flex items-center gap-2 text-left"
                             >
-                              <option value="" disabled>
-                                -- Seleccionar Tema Destino --
-                              </option>
-                              {activeCourse.modules.map((m, idx) => (
-                                <option key={m.id} value={m.id}>
-                                  Tema {getSubtemaNumber(activeCourse.modules, idx)}: {m.title.slice(0, 26)}
-                                </option>
-                              ))}
-                            </select>
+                              {isExpanded ? (
+                                <ChevronDown className="h-4 w-4 text-[#64748B]" />
+                              ) : (
+                                <ChevronRight className="h-4 w-4 text-[#64748B]" />
+                              )}
+                              <FolderOpen className="h-4 w-4 text-amber-500 shrink-0" />
+                              <span className="text-xs font-extrabold text-[#1E293B]">
+                                {folder.name}
+                              </span>
+                              <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-bold text-[#64748B]">
+                                {folder.videos.length} videos
+                              </span>
+                            </button>
+
+                            {/* Acciones de la carpeta completa: Seleccionar todos / Asignar carpeta entera */}
+                            <div className="flex items-center gap-1.5">
+                              {folder.videos.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isEntireFolderChecked) {
+                                      setCheckedBunnyGuids((prev) =>
+                                        prev.filter((id) => !allFolderGuids.includes(id))
+                                      );
+                                    } else {
+                                      setCheckedBunnyGuids((prev) =>
+                                        Array.from(new Set([...prev, ...allFolderGuids]))
+                                      );
+                                    }
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded-lg border border-[#E2E8F0] bg-white px-2 py-1 text-[10px] font-bold text-[#64748B] hover:text-[#1E293B]"
+                                  title="Marcar o desmarcar todos los videos de esta carpeta"
+                                >
+                                  {isEntireFolderChecked ? (
+                                    <>
+                                      <CheckSquare className="h-3 w-3 text-blue-600" />
+                                      Desmarcar carpeta
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Square className="h-3 w-3" />
+                                      Marcar carpeta
+                                    </>
+                                  )}
+                                </button>
+                              )}
+
+                              {/* Asignar carpeta completa a un tema en 1 clic */}
+                              {folder.unassignedVideos > 0 && activeCourse.modules.length > 0 && (
+                                <select
+                                  aria-label="Asignar todos los videos de esta carpeta a un tema"
+                                  value=""
+                                  onChange={(e) => {
+                                    const targetModId = e.target.value;
+                                    if (targetModId) {
+                                      handleAssignFolderVideosToModule(
+                                        folder.videos,
+                                        targetModId,
+                                        true
+                                      );
+                                    }
+                                  }}
+                                  className="rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-extrabold text-blue-800 hover:bg-blue-100"
+                                  title="Asignar todos los videos sueltos de esta carpeta a un tema de inmediato"
+                                >
+                                  <option value="" disabled>
+                                    ⚡ Asignar carpeta completa a...
+                                  </option>
+                                  {activeCourse.modules.map((m, idx) => (
+                                    <option key={m.id} value={m.id}>
+                                      Tema {getSubtemaNumber(activeCourse.modules, idx)}: {m.title.slice(0, 24)}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
+                            </div>
                           </div>
+
+                          {/* VIDEOS DENTRO DE ESTA CARPETA (HOJAS DEL ÁRBOL) */}
+                          {isExpanded && (
+                            <div className="divide-y divide-[#E2E8F0] p-2 space-y-1.5">
+                              {folder.videos.length === 0 ? (
+                                <div className="py-3 text-center text-[11px] text-[#64748B]">
+                                  No hay videos que coincidan con el filtro en esta carpeta.
+                                </div>
+                              ) : (
+                                folder.videos.map((bv, bvIdx) => {
+                                  const placement = videoPlacementMap.get(bv.guid);
+                                  const isChecked = checkedBunnyGuids.includes(bv.guid);
+
+                                  return (
+                                    <div
+                                      key={bv.guid}
+                                      className={`rounded-xl border p-2.5 transition ${
+                                        placement
+                                          ? 'border-[#E2E8F0] bg-white'
+                                          : 'border-amber-200 bg-amber-50/20'
+                                      }`}
+                                    >
+                                      <div className="flex items-start justify-between gap-2">
+                                        <div className="flex items-center gap-2">
+                                          <input
+                                            type="checkbox"
+                                            checked={isChecked}
+                                            onChange={(e) => {
+                                              if (e.target.checked) {
+                                                setCheckedBunnyGuids((prev) => [
+                                                  ...prev,
+                                                  bv.guid,
+                                                ]);
+                                              } else {
+                                                setCheckedBunnyGuids((prev) =>
+                                                  prev.filter((id) => id !== bv.guid)
+                                                );
+                                              }
+                                            }}
+                                            className="h-3.5 w-3.5 rounded accent-blue-600"
+                                          />
+                                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-[#64748B]">
+                                            #{bvIdx + 1}
+                                          </span>
+                                          <span className="text-xs font-bold text-[#1E293B] line-clamp-1">
+                                            {bv.title.replace(/\.mp4$/i, '')}
+                                          </span>
+                                        </div>
+
+                                        {placement ? (
+                                          <span
+                                            className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-bold ${
+                                              placement.isCurrentCourse
+                                                ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                                                : 'bg-slate-100 text-[#64748B]'
+                                            }`}
+                                            title={`Ubicado en: ${placement.courseTitle} → ${placement.moduleTitle}`}
+                                          >
+                                            {placement.isCurrentCourse
+                                              ? 'En este curso'
+                                              : 'Otro curso'}
+                                          </span>
+                                        ) : (
+                                          <span className="shrink-0 rounded-full bg-amber-100 border border-amber-200 px-2 py-0.5 text-[9px] font-bold text-amber-900">
+                                            Suelto
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      {/* Selector rápido individual para enviar video a un tema */}
+                                      <div className="mt-2 flex items-center justify-between gap-2 pl-6">
+                                        <span className="text-[10px] font-medium text-[#64748B]">
+                                          Enviar a:
+                                        </span>
+                                        <select
+                                          aria-label="Asignar video a un tema"
+                                          value=""
+                                          onChange={(e) => {
+                                            const targetModId = e.target.value;
+                                            if (targetModId)
+                                              handleAssignSingleVideo(bv, targetModId);
+                                          }}
+                                          className="flex-1 rounded-lg border border-[#E2E8F0] bg-white px-2 py-1 text-[11px] font-medium text-[#1E293B] focus:border-blue-600 focus:outline-none"
+                                        >
+                                          <option value="" disabled>
+                                            -- Seleccionar Tema Destino --
+                                          </option>
+                                          {activeCourse.modules.map((m, idx) => (
+                                            <option key={m.id} value={m.id}>
+                                              Tema {getSubtemaNumber(activeCourse.modules, idx)}: {m.title.slice(0, 26)}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </div>
+                          )}
                         </div>
                       );
-                    })}
-                  </div>
-                )}
+                    })
+                  )}
+                </div>
               </div>
             </div>
           </div>
