@@ -4,9 +4,9 @@ import { LMSProvider } from '@/context/LMSContext';
 import { WhiteLabelTopBar } from '@/components/WhiteLabelTopBar';
 
 export const metadata: Metadata = {
-  title: 'LMS Marca Blanca & Multitenant — Plataforma SaaS B2B',
+  title: 'Plataforma Educativa Central — Sistema Multi-Academia',
   description:
-    'Plataforma LMS Marca Blanca y Multitenant para venta directa de cursos pregrabados, resellers con control de licencias y seguridad anti-compartir cuenta.',
+    'Campus virtual con diseño ergonómico de alta legibilidad, subdominios temáticos y lecciones prácticas paso a paso.',
 };
 
 export default function RootLayout({
@@ -16,7 +16,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="es">
-      <body className="min-h-screen bg-slate-950 text-slate-100 antialiased selection:bg-indigo-500 selection:text-white">
+      <body className="min-h-screen bg-[#F8FAFC] text-[#1E293B] antialiased selection:bg-slate-200 selection:text-slate-900">
         <LMSProvider>
           <div className="flex min-h-screen flex-col">
             <WhiteLabelTopBar />

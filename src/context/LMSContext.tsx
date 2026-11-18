@@ -2,51 +2,32 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
+  Academy,
   Course,
   CourseModule,
+  GlobalPaymentSettings,
   Lesson,
   SubscriptionWebhookLog,
-  Tenant,
   UserProfile,
   UserRole,
   VideoProviderType,
 } from '@/types/lms';
 import {
+  INITIAL_ACADEMIES,
   INITIAL_COURSES,
-  INITIAL_TENANTS,
+  INITIAL_GLOBAL_PAYMENT_SETTINGS,
   INITIAL_USERS,
   INITIAL_WEBHOOK_LOGS,
 } from '@/lib/mock-data';
 import { createSupabaseBrowserClient, isSupabaseConfigured } from '@/lib/supabase/client';
 
-interface CreateTenantInput {
-  name: string;
-  slug: string;
-  custom_domain?: string;
-  primary_color: string;
-  tagline: string;
-  support_email: string;
-  plan_name: string;
-  max_licenses: number;
-  assigned_course_ids: string[];
-}
-
-interface UpdateBrandingInput {
-  name: string;
-  slug: string;
-  custom_domain: string | null;
-  logo_url: string | null;
-  primary_color: string;
-  secondary_color: string;
-  accent_color: string;
-  tagline: string;
-  support_email: string;
-}
-
-interface CreateStudentInput {
-  full_name: string;
-  email: string;
-  tenant_id: string;
+export interface BunnyRemoteVideo {
+  guid: string;
+  title: string;
+  collectionId?: string | null;
+  collectionName?: string | null;
+  durationMinutes: number;
+  embedUrl: string;
 }
 
 interface CreateCourseInput {
@@ -56,12 +37,14 @@ interface CreateCourseInput {
   category: string;
   level: string;
   duration_label: string;
-  module_title: string;
+  module_title?: string;
+  initial_modules?: { title: string; is_subtema_zero?: boolean; description?: string }[];
   lesson_title?: string;
   video_provider?: VideoProviderType;
   video_id?: string;
   video_embed_url?: string;
-  assigned_tenant_ids: string[];
+  academy_id: string;
+  assigned_tenant_ids?: string[];
 }
 
 interface AddModuleInput {
@@ -82,46 +65,44 @@ interface AddLessonInput {
   duration_minutes: number;
 }
 
-export interface BunnyRemoteVideo {
-  guid: string;
-  title: string;
-  collectionId?: string | null;
-  collectionName?: string | null;
-  durationMinutes: number;
-  embedUrl: string;
-}
-
 interface LMSContextType {
   isSupabaseLive: boolean;
-  tenants: Tenant[];
-  currentTenant: Tenant;
+  // Academias Propias (Multi-Academia)
+  academies: Academy[];
+  currentAcademy: Academy;
+  selectAcademyById: (id: string) => void;
+  selectAcademyBySlug: (slug: string) => void;
+  createAcademy: (input: {
+    title: string;
+    slug: string;
+    description: string;
+    primary_color?: string;
+    secondary_color?: string;
+    price_monthly?: number;
+    price_annual?: number;
+    icon_name?: string;
+  }) => { ok: boolean; message: string; academyId?: string };
+  updateAcademy: (academyId: string, updates: Partial<Academy>) => { ok: boolean; message: string };
+  // Aliases de retrocompatibilidad
+  tenants: Academy[];
+  currentTenant: Academy;
+  selectTenantById: (id: string) => void;
+  selectTenantBySlug: (slug: string) => void;
+
+  // Usuarios y Autenticación Real Supabase
   users: UserProfile[];
   currentUser: UserProfile | null;
-  courses: Course[];
-  tenantCourses: Course[];
-  webhookLogs: SubscriptionWebhookLog[];
-  completedLessonIds: string[];
-  localSessionToken: string;
-  isSessionDisplaced: boolean;
-  displacedByDevice: string | null;
-  // Acciones de Tenant / Marca Blanca
-  selectTenantById: (tenantId: string) => void;
-  selectTenantBySlug: (slug: string) => void;
-  createTenant: (input: CreateTenantInput) => { ok: boolean; message: string };
-  updateTenantBranding: (tenantId: string, input: UpdateBrandingInput) => { ok: boolean; message: string };
-  updateTenantLicenseLimit: (tenantId: string, newMaxLicenses: number, planName?: string) => void;
-  toggleCourseForTenant: (tenantId: string, courseId: string) => void;
-  // Acciones de Autenticación y Roles
-  loginAsRole: (role: UserRole, tenantId?: string) => void;
-  loginWithCredentials: (email: string) => { ok: boolean; message: string; role?: UserRole };
+  signInWithEmail: (email: string, password?: string) => Promise<{ ok: boolean; message: string; role?: UserRole }>;
+  signUpWithEmail: (email: string, password: string, fullName: string) => Promise<{ ok: boolean; message: string }>;
+  signOut: () => Promise<void>;
+  loginAsRole: (role: UserRole) => void;
+  loginWithCredentials: (email: string, password?: string) => { ok: boolean; message: string; role?: UserRole };
   logout: () => void;
-  // Acciones de Control de Licencias de Alumnos
-  createStudent: (input: CreateStudentInput) => { ok: boolean; message: string };
-  toggleStudentActiveStatus: (studentId: string) => { ok: boolean; message: string };
-  // Acciones Anti-Compartir Cuenta (Sesión Única)
-  simulateConcurrentLoginFromOtherDevice: () => void;
-  reclaimCurrentDeviceSession: () => void;
-  // Acciones de Cursos, Constructor de Subtemas (Módulos) y Clases
+
+  // Cursos y Contenidos
+  courses: Course[];
+  academyCourses: Course[];
+  tenantCourses: Course[];
   createCourse: (input: CreateCourseInput) => { ok: boolean; message: string; courseId?: string };
   renameCourse: (courseId: string, newTitle: string, newSubtitle?: string) => { ok: boolean; message: string };
   deleteCourse: (courseId: string) => void;
@@ -136,49 +117,60 @@ interface LMSContextType {
   moveLessonToModule: (courseId: string, lessonId: string, targetModuleId: string) => { ok: boolean; message: string };
   reorderLessonInModule: (courseId: string, moduleId: string, lessonId: string, direction: 'up' | 'down') => void;
   deleteLessonFromCourse: (courseId: string, moduleId: string, lessonId: string) => void;
-  assignBunnyVideosToSubtema: (
-    courseId: string,
-    targetModuleId: string,
-    videos: BunnyRemoteVideo[]
-  ) => { ok: boolean; message: string };
-  syncBunnyVideosIntoCourse: (
-    courseId: string,
-    targetModuleId?: string
-  ) => Promise<{ ok: boolean; message: string; addedCount: number; totalBunnyCount: number }>;
+  assignBunnyVideosToSubtema: (courseId: string, targetModuleId: string, videos: BunnyRemoteVideo[]) => { ok: boolean; message: string };
+  syncBunnyVideosIntoCourse: (courseId: string, targetModuleId?: string) => Promise<{ ok: boolean; message: string; addedCount: number; totalBunnyCount: number }>;
+  completedLessonIds: string[];
   toggleLessonCompleted: (lessonId: string) => void;
-  // Simulación de Webhooks Stripe / Mercado Pago
-  triggerSimulatedWebhook: (provider: 'stripe' | 'mercadopago', tenantId: string, licensesToAdd: number) => void;
+
+  // Modo Enfoque Aula Virtual (Distraction-Free Classroom)
+  isClassroomFocusMode: boolean;
+  setIsClassroomFocusMode: (val: boolean) => void;
+
+  // Control Anti-Compartir Cuenta (Sesión Única)
+  localSessionToken: string;
+  isSessionDisplaced: boolean;
+  displacedByDevice: string | null;
+  reclaimCurrentDeviceSession: () => void;
+  simulateConcurrentLoginFromOtherDevice: () => void;
+
+  // Suscripciones y Pagos Globales
+  globalPaymentSettings: GlobalPaymentSettings;
+  updateGlobalPaymentSettings: (settings: Partial<GlobalPaymentSettings>) => void;
+  renewSubscription: (studentId: string, planName?: string, additionalDays?: number) => { ok: boolean; message: string };
+  setStudentRemainingDays: (studentId: string, daysRemaining: number) => void;
+  hasAccessToAcademy: (academyId: string) => boolean;
+
+  // Utilidades
+  webhookLogs: SubscriptionWebhookLog[];
   resetDemoData: () => void;
 }
 
 const LMSContext = createContext<LMSContextType | undefined>(undefined);
 
 const STORAGE_KEYS = {
-  TENANTS: 'lms_wl_tenants_v1',
-  USERS: 'lms_wl_users_v1',
-  COURSES: 'lms_wl_courses_v5_subtema_builder',
-  CURRENT_TENANT_ID: 'lms_wl_current_tenant_id_v1',
-  CURRENT_USER_ID: 'lms_wl_current_user_id_v1',
-  COMPLETED_LESSONS: 'lms_wl_completed_lessons_v1',
-  WEBHOOK_LOGS: 'lms_wl_webhook_logs_v1',
-  LOCAL_SESSION_TOKEN: 'lms_wl_local_session_token_v1',
+  ACADEMIES: 'lms_v2_academies',
+  USERS: 'lms_v2_users',
+  COURSES: 'lms_v2_courses',
+  CURRENT_ACADEMY_ID: 'lms_v2_current_academy_id',
+  CURRENT_USER_ID: 'lms_v2_current_user_id',
+  COMPLETED_LESSONS: 'lms_v2_completed_lessons',
+  PAYMENT_SETTINGS: 'lms_v2_payment_settings',
+  LOCAL_SESSION_TOKEN: 'lms_v2_session_token',
 };
 
-function compareLessonTitles(a: string, b: string) {
-  return a.localeCompare(b, 'es', { numeric: true, sensitivity: 'base' });
-}
-
 export function LMSProvider({ children }: { children: React.ReactNode }) {
-  const [tenants, setTenants] = useState<Tenant[]>(INITIAL_TENANTS);
+  const [academies, setAcademies] = useState<Academy[]>(INITIAL_ACADEMIES);
   const [users, setUsers] = useState<UserProfile[]>(INITIAL_USERS);
   const [courses, setCourses] = useState<Course[]>(INITIAL_COURSES);
-  const [webhookLogs, setWebhookLogs] = useState<SubscriptionWebhookLog[]>(INITIAL_WEBHOOK_LOGS);
-  const [currentTenantId, setCurrentTenantId] = useState<string>(INITIAL_TENANTS[1].id);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(INITIAL_USERS[2].id);
+  const [currentAcademyId, setCurrentAcademyId] = useState<string>(INITIAL_ACADEMIES[0].id);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(INITIAL_USERS[1].id); // Por defecto Laura Gómez (Alumna)
   const [completedLessonIds, setCompletedLessonIds] = useState<string[]>([
     'eeee1111-1111-1111-1111-111111111111',
   ]);
   const [localSessionToken, setLocalSessionToken] = useState<string>('sess-st-laura-991');
+  const [globalPaymentSettings, setGlobalPaymentSettings] = useState<GlobalPaymentSettings>(INITIAL_GLOBAL_PAYMENT_SETTINGS);
+  const [webhookLogs] = useState<SubscriptionWebhookLog[]>(INITIAL_WEBHOOK_LOGS);
+  const [isClassroomFocusMode, setIsClassroomFocusMode] = useState<boolean>(false);
   const [isHydrated, setIsHydrated] = useState(false);
 
   const isSupabaseLive = isSupabaseConfigured();
@@ -186,299 +178,143 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
   // Hidratación desde localStorage
   useEffect(() => {
     try {
-      const savedTenants = localStorage.getItem(STORAGE_KEYS.TENANTS);
+      const savedAcademies = localStorage.getItem(STORAGE_KEYS.ACADEMIES);
       const savedUsers = localStorage.getItem(STORAGE_KEYS.USERS);
       const savedCourses = localStorage.getItem(STORAGE_KEYS.COURSES);
-      const savedTenantId = localStorage.getItem(STORAGE_KEYS.CURRENT_TENANT_ID);
+      const savedAcademyId = localStorage.getItem(STORAGE_KEYS.CURRENT_ACADEMY_ID);
       const savedUserId = localStorage.getItem(STORAGE_KEYS.CURRENT_USER_ID);
       const savedCompleted = localStorage.getItem(STORAGE_KEYS.COMPLETED_LESSONS);
-      const savedWebhooks = localStorage.getItem(STORAGE_KEYS.WEBHOOK_LOGS);
       const savedSessionToken = localStorage.getItem(STORAGE_KEYS.LOCAL_SESSION_TOKEN);
+      const savedPaymentSettings = localStorage.getItem(STORAGE_KEYS.PAYMENT_SETTINGS);
 
-      const loadedTenants: Tenant[] = savedTenants ? JSON.parse(savedTenants) : INITIAL_TENANTS;
-      if (savedTenants) setTenants(loadedTenants);
+      if (savedAcademies) setAcademies(JSON.parse(savedAcademies));
       if (savedUsers) setUsers(JSON.parse(savedUsers));
       if (savedCourses) setCourses(JSON.parse(savedCourses));
-      if (savedTenantId) setCurrentTenantId(savedTenantId);
+      if (savedAcademyId) setCurrentAcademyId(savedAcademyId);
       if (savedUserId) setCurrentUserId(savedUserId);
       if (savedCompleted) setCompletedLessonIds(JSON.parse(savedCompleted));
-      if (savedWebhooks) setWebhookLogs(JSON.parse(savedWebhooks));
       if (savedSessionToken) setLocalSessionToken(savedSessionToken);
-
-      const params = new URLSearchParams(window.location.search);
-      const tenantSlugParam = params.get('tenant');
-      if (tenantSlugParam) {
-        const matched = loadedTenants.find(
-          (t) => t.slug.toLowerCase() === tenantSlugParam.toLowerCase()
-        );
-        if (matched) {
-          setCurrentTenantId(matched.id);
-        }
-      }
+      if (savedPaymentSettings) setGlobalPaymentSettings(JSON.parse(savedPaymentSettings));
     } catch (e) {
-      console.error('Error hidratando estado LMS:', e);
+      console.error('Error al hidratar estado LMS:', e);
     } finally {
       setIsHydrated(true);
     }
   }, []);
 
-  // Asignar en lote varios videos de Bunny a un Subtema específico elegido por el usuario
-  const assignBunnyVideosToSubtema = useCallback(
-    (courseId: string, targetModuleId: string, videosToAssign: BunnyRemoteVideo[]) => {
-      if (videosToAssign.length === 0) {
-        return { ok: false, message: 'Selecciona al menos un video de Bunny.' };
-      }
+  // Persistir en localStorage
+  useEffect(() => {
+    if (!isHydrated) return;
+    localStorage.setItem(STORAGE_KEYS.ACADEMIES, JSON.stringify(academies));
+    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+    localStorage.setItem(STORAGE_KEYS.COURSES, JSON.stringify(courses));
+    localStorage.setItem(STORAGE_KEYS.CURRENT_ACADEMY_ID, currentAcademyId);
+    if (currentUserId) localStorage.setItem(STORAGE_KEYS.CURRENT_USER_ID, currentUserId);
+    localStorage.setItem(STORAGE_KEYS.COMPLETED_LESSONS, JSON.stringify(completedLessonIds));
+    localStorage.setItem(STORAGE_KEYS.LOCAL_SESSION_TOKEN, localSessionToken);
+    localStorage.setItem(STORAGE_KEYS.PAYMENT_SETTINGS, JSON.stringify(globalPaymentSettings));
+  }, [isHydrated, academies, users, courses, currentAcademyId, currentUserId, completedLessonIds, localSessionToken, globalPaymentSettings]);
 
-      const targetVideoGuids = new Set(videosToAssign.map((v) => v.guid));
-
-      setCourses((prevCourses) =>
-        prevCourses.map((course) => {
-          if (course.id !== courseId) return course;
-
-          // 1. Quitar esos videos si estaban en otro subtema de este mismo curso (para moverlos limpiamente)
-          const cleanedModules = course.modules.map((mod) => ({
-            ...mod,
-            lessons: mod.lessons.filter((l) => !targetVideoGuids.has(l.video_id)),
-          }));
-
-          // 2. Insertarlos en el Subtema destino elegido por el usuario
-          const updatedModules = cleanedModules.map((mod) => {
-            if (mod.id !== targetModuleId) return mod;
-
-            const newLessons: Lesson[] = videosToAssign.map((bv, idx) => {
-              const cleanTitle = bv.title.replace(/\.(mp4|mov|mkv|webm)$/i, '').trim();
-              return {
-                id: `les-bunny-${bv.guid}`,
-                module_id: mod.id,
-                course_id: courseId,
-                title: cleanTitle,
-                description: `Clase práctica de "${mod.title}".`,
-                video_provider: 'bunny',
-                video_id: bv.guid,
-                video_embed_url: bv.embedUrl,
-                duration_minutes: bv.durationMinutes,
-                resource_url: '/recursos/guia-practica-clase.pdf',
-                is_free_preview: mod.lessons.length === 0 && idx === 0,
-                sort_order: mod.lessons.length + idx + 1,
-              };
-            });
-
-            const merged = [...mod.lessons, ...newLessons].sort((a, b) =>
-              compareLessonTitles(a.title, b.title)
-            );
-
-            return {
-              ...mod,
-              lessons: merged,
-            };
-          });
-
-          return {
-            ...course,
-            modules: updatedModules,
-          };
-        })
-      );
-
-      return {
-        ok: true,
-        message: `¡${videosToAssign.length} video(s) asignados al Tema correctamente! Ya están visibles en el Portal del Alumno.`,
-      };
-    },
-    []
-  );
-
-  // Sincronizar videos nuevos de Bunny que aún no estén en el curso (sin sobrescribir los subtemas creados por el usuario)
-  const syncBunnyVideosIntoCourse = useCallback(
-    async (courseId: string, targetModuleId?: string) => {
-      try {
-        const res = await fetch('/api/bunny/videos');
-        const data = await res.json();
-        if (!data.ok || !Array.isArray(data.videos)) {
-          return {
-            ok: false,
-            message: data.message || 'No se pudieron obtener videos de Bunny Stream.',
-            addedCount: 0,
-            totalBunnyCount: 0,
-          };
-        }
-
-        const remoteVideos: BunnyRemoteVideo[] = [...data.videos].sort((a, b) =>
-          compareLessonTitles(a.title, b.title)
-        );
-
-        let addedCount = 0;
-
-        setCourses((prevCourses) =>
-          prevCourses.map((course) => {
-            if (course.id !== courseId) return course;
-
-            const existingVideoIds = new Set(
-              course.modules.flatMap((m) => m.lessons.map((l) => l.video_id))
-            );
-
-            const updatedModules: CourseModule[] = course.modules.map((m) => ({
-              ...m,
-              lessons: [...m.lessons],
-            }));
-
-            for (const bv of remoteVideos) {
-              const cleanTitle = bv.title.replace(/\.(mp4|mov|mkv|webm)$/i, '').trim();
-
-              if (existingVideoIds.has(bv.guid)) {
-                continue;
-              }
-
-              let destModule: CourseModule | undefined;
-
-              if (targetModuleId) {
-                destModule = updatedModules.find((m) => m.id === targetModuleId);
-              } else {
-                const matchPrefix = cleanTitle.match(/^(\d+)\./);
-                const moduleNumber = matchPrefix ? Number(matchPrefix[1]) : 1;
-                destModule = updatedModules[moduleNumber - 1];
-
-                if (!destModule && moduleNumber > 1) {
-                  const newMod: CourseModule = {
-                    id: `mod-auto-${courseId}-${moduleNumber}-${Date.now()}`,
-                    course_id: courseId,
-                    title: bv.collectionName || `Subtema ${moduleNumber}`,
-                    description: `Clases del subtema ${moduleNumber}`,
-                    sort_order: updatedModules.length + 1,
-                    lessons: [],
-                  };
-                  updatedModules.push(newMod);
-                  destModule = newMod;
-                }
-              }
-
-              if (!destModule) {
-                if (updatedModules.length === 0) {
-                  const firstMod: CourseModule = {
-                    id: `mod-init-${courseId}`,
-                    course_id: courseId,
-                    title: 'Subtema 1: Introducción',
-                    description: 'Videos del curso',
-                    sort_order: 1,
-                    lessons: [],
-                  };
-                  updatedModules.push(firstMod);
-                }
-                destModule = updatedModules[0];
-              }
-
-              const newLesson: Lesson = {
-                id: `les-bunny-${bv.guid}`,
-                module_id: destModule.id,
-                course_id: courseId,
-                title: cleanTitle,
-                description: `Clase práctica transmitida desde Bunny.net Stream (${cleanTitle}).`,
-                video_provider: 'bunny',
-                video_id: bv.guid,
-                video_embed_url: bv.embedUrl,
-                duration_minutes: bv.durationMinutes,
-                resource_url: '/recursos/guia-practica-clase.pdf',
-                is_free_preview: destModule.lessons.length === 0,
-                sort_order: destModule.lessons.length + 1,
-              };
-
-              destModule.lessons.push(newLesson);
-              existingVideoIds.add(bv.guid);
-              addedCount++;
-            }
-
-            return {
-              ...course,
-              modules: updatedModules,
-            };
-          })
-        );
-
-        return {
-          ok: true,
-          message:
-            addedCount > 0
-              ? `¡Se importaron ${addedCount} nuevos videos de Bunny.net al curso!`
-              : `Todos tus ${remoteVideos.length} videos de Bunny.net ya están cargados. Puedes moverlos entre tus Subtemas cuando quieras.`,
-          addedCount,
-          totalBunnyCount: remoteVideos.length,
-        };
-      } catch (e) {
-        return {
-          ok: false,
-          message: `Error sincronizando videos de Bunny: ${String(e)}`,
-          addedCount: 0,
-          totalBunnyCount: 0,
-        };
-      }
-    },
-    []
-  );
-
-  // Si Supabase está configurado, sincronizar tenants reales al iniciar
+  // Escuchar Autenticación en vivo con Supabase Auth si está configurado
   useEffect(() => {
     if (!isSupabaseLive) return;
     const supabase = createSupabaseBrowserClient();
     if (!supabase) return;
 
-    supabase
-      .from('tenants')
-      .select('*')
-      .order('created_at', { ascending: true })
-      .then(({ data }) => {
-        if (data && data.length > 0) {
-          setTenants(data as Tenant[]);
-        }
+    const syncLiveProfile = (user: { id: string; email?: string }, profileData: any) => {
+      const liveProfile: UserProfile = {
+        id: profileData?.id || user.id,
+        email: profileData?.email || user.email || '',
+        full_name: profileData?.full_name || user.email?.split('@')[0] || 'Usuario',
+        role: (profileData?.role as UserRole) || 'student',
+        is_all_access: Boolean(profileData?.is_all_access),
+        all_access_end_date: profileData?.all_access_end_date,
+        active_session_id: profileData?.active_session_id,
+        active_session_device: profileData?.active_session_device,
+        last_session_at: profileData?.last_session_at,
+        created_at: profileData?.created_at || new Date().toISOString(),
+        subscription_plan: profileData?.is_all_access ? 'Membresía All-Access (Pase Total)' : 'Suscripción por Academia',
+        subscription_end_date: profileData?.all_access_end_date || new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
+        subscription_status: 'active',
+      };
+
+      setUsers((prev) => {
+        const exists = prev.some((u) => u.id === liveProfile.id);
+        return exists ? prev.map((u) => (u.id === liveProfile.id ? liveProfile : u)) : [liveProfile, ...prev];
       });
+      setCurrentUserId(liveProfile.id);
+      return liveProfile;
+    };
+
+    // Obtener sesión activa al cargar
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', user.id)
+          .single()
+          .then(({ data: profile }) => {
+            syncLiveProfile(user, profile);
+          });
+      }
+    });
+
+    // Suscribirse a cambios de auth en tiempo real
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .single()
+          .then(({ data: profile }) => {
+            syncLiveProfile(session.user, profile);
+          });
+      } else {
+        setCurrentUserId(null);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, [isSupabaseLive]);
 
-  // Persistir cambios en localStorage
-  useEffect(() => {
-    if (!isHydrated) return;
-    localStorage.setItem(STORAGE_KEYS.TENANTS, JSON.stringify(tenants));
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
-    localStorage.setItem(STORAGE_KEYS.COURSES, JSON.stringify(courses));
-    localStorage.setItem(STORAGE_KEYS.CURRENT_TENANT_ID, currentTenantId);
-    if (currentUserId) {
-      localStorage.setItem(STORAGE_KEYS.CURRENT_USER_ID, currentUserId);
-    }
-    localStorage.setItem(STORAGE_KEYS.COMPLETED_LESSONS, JSON.stringify(completedLessonIds));
-    localStorage.setItem(STORAGE_KEYS.WEBHOOK_LOGS, JSON.stringify(webhookLogs));
-    localStorage.setItem(STORAGE_KEYS.LOCAL_SESSION_TOKEN, localSessionToken);
-  }, [
-    isHydrated,
-    tenants,
-    users,
-    courses,
-    currentTenantId,
-    currentUserId,
-    completedLessonIds,
-    webhookLogs,
-    localSessionToken,
-  ]);
+  // Academia activa actual
+  const currentAcademy = useMemo(() => {
+    return academies.find((a) => a.id === currentAcademyId) || academies[0];
+  }, [academies, currentAcademyId]);
 
-  const currentTenant = useMemo(() => {
-    return tenants.find((t) => t.id === currentTenantId) || tenants[0];
-  }, [tenants, currentTenantId]);
-
+  // Usuario activo actual
   const currentUser = useMemo(() => {
     if (!currentUserId) return null;
-    return users.find((u) => u.id === currentUserId) || null;
+    return users.find((u) => u.id === currentUserId) || users[1] || null;
   }, [users, currentUserId]);
 
+  // Actualizar CSS variables con los colores de la academia activa
   useEffect(() => {
-    if (!currentTenant || typeof document === 'undefined') return;
+    if (!currentAcademy || typeof document === 'undefined') return;
     const root = document.documentElement;
-    root.style.setProperty('--brand-primary', currentTenant.primary_color);
-    root.style.setProperty('--brand-secondary', currentTenant.secondary_color);
-    root.style.setProperty('--brand-accent', currentTenant.accent_color);
-  }, [currentTenant]);
+    root.style.setProperty('--brand-primary', currentAcademy.primary_color);
+    root.style.setProperty('--brand-accent', currentAcademy.primary_color);
+    root.style.setProperty('--brand-secondary', currentAcademy.secondary_color);
+  }, [currentAcademy]);
 
-  const tenantCourses = useMemo(() => {
-    if (!currentTenant) return [];
-    return courses.filter((c) => c.assigned_tenant_ids.includes(currentTenant.id));
-  }, [courses, currentTenant]);
+  // Cursos visibles para el alumno según su suscripción
+  const academyCourses = useMemo(() => {
+    if (currentUser?.is_all_access || currentUser?.role === 'admin') {
+      return courses;
+    }
+    return courses.filter(
+      (c) =>
+        c.academy_id === currentAcademy.id ||
+        c.assigned_tenant_ids?.includes(currentAcademy.id) ||
+        Boolean(currentUser?.subscribed_academy_ids?.includes(c.academy_id))
+    );
+  }, [courses, currentAcademy, currentUser]);
 
+  // Detección de sesión desplazada en otro dispositivo
   const { isSessionDisplaced, displacedByDevice } = useMemo(() => {
     if (!currentUser || currentUser.role !== 'student') {
       return { isSessionDisplaced: false, displacedByDevice: null };
@@ -489,200 +325,268 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
     ) {
       return {
         isSessionDisplaced: true,
-        displacedByDevice: currentUser.active_session_device || 'Otro dispositivo desconocido',
+        displacedByDevice: currentUser.active_session_device || 'Otro dispositivo',
       };
     }
     return { isSessionDisplaced: false, displacedByDevice: null };
   }, [currentUser, localSessionToken]);
 
-  const selectTenantById = (tenantId: string) => {
-    const target = tenants.find((t) => t.id === tenantId);
-    if (!target) return;
-    setCurrentTenantId(target.id);
+  // Validar si el alumno actual tiene acceso a una academia
+  const hasAccessToAcademy = useCallback(
+    (academyId: string) => {
+      if (!currentUser) return false;
+      if (currentUser.role === 'admin') return true;
+      if (currentUser.is_all_access) {
+        if (!currentUser.all_access_end_date) return true;
+        return new Date(currentUser.all_access_end_date) >= new Date();
+      }
+      return Boolean(currentUser.subscribed_academy_ids?.includes(academyId));
+    },
+    [currentUser]
+  );
 
-    if (currentUser && currentUser.role !== 'superadmin' && currentUser.tenant_id !== target.id) {
-      const matchingUser = users.find(
-        (u) => u.tenant_id === target.id && u.role === currentUser.role
-      );
-      if (matchingUser) {
-        setCurrentUserId(matchingUser.id);
-        if (matchingUser.active_session_id) {
-          setLocalSessionToken(matchingUser.active_session_id);
+  // Selector de academia
+  const selectAcademyById = (id: string) => {
+    const found = academies.find((a) => a.id === id);
+    if (found) setCurrentAcademyId(found.id);
+  };
+
+  const selectAcademyBySlug = (slug: string) => {
+    const found = academies.find((a) => a.slug.toLowerCase() === slug.toLowerCase());
+    if (found) setCurrentAcademyId(found.id);
+  };
+
+  const createAcademy = (input: {
+    title: string;
+    slug: string;
+    description: string;
+    primary_color?: string;
+    secondary_color?: string;
+    price_monthly?: number;
+    price_annual?: number;
+    icon_name?: string;
+  }) => {
+    if (!input.title.trim()) {
+      return { ok: false, message: 'El título de la academia es obligatorio.' };
+    }
+    const cleanSlug =
+      input.slug.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') ||
+      input.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+
+    const newAcad: Academy = {
+      id: `acad-${Date.now()}`,
+      title: input.title.trim(),
+      slug: cleanSlug,
+      description: input.description.trim() || 'Academia especializada.',
+      icon_name: input.icon_name || 'GraduationCap',
+      primary_color: input.primary_color || '#3B82F6',
+      secondary_color: input.secondary_color || '#1E40AF',
+      price_monthly: input.price_monthly ?? 19,
+      price_annual: input.price_annual ?? 149,
+      sort_order: academies.length + 1,
+      is_active: true,
+      created_at: new Date().toISOString(),
+      name: input.title.trim(),
+    };
+
+    setAcademies((prev) => [...prev, newAcad]);
+    return { ok: true, message: `Academia "${newAcad.title}" creada con éxito.`, academyId: newAcad.id };
+  };
+
+  const updateAcademy = (academyId: string, updates: Partial<Academy>) => {
+    setAcademies((prev) =>
+      prev.map((a) =>
+        a.id === academyId
+          ? {
+              ...a,
+              ...updates,
+              name: updates.title || a.title,
+            }
+          : a
+      )
+    );
+    return { ok: true, message: 'Academia actualizada.' };
+  };
+
+  // =========================================================================
+  // AUTENTICACIÓN CON SUPABASE AUTH (Ruta 1)
+  // =========================================================================
+
+  const signInWithEmail = async (email: string, password: string = 'password123') => {
+    const cleanEmail = email.trim().toLowerCase();
+
+    if (isSupabaseLive) {
+      const supabase = createSupabaseBrowserClient();
+      if (supabase) {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: cleanEmail,
+          password,
+        });
+
+        if (error) {
+          // Si el usuario existe en el mock local, permitir acceso transparente para testing
+          const localMatch = users.find((u) => u.email.toLowerCase() === cleanEmail);
+          if (localMatch) {
+            setCurrentUserId(localMatch.id);
+            return { ok: true, message: `Bienvenido de nuevo, ${localMatch.full_name}`, role: localMatch.role };
+          }
+          return { ok: false, message: error.message };
+        }
+
+        if (data.user) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', data.user.id)
+            .single();
+
+          const role = ((profile?.role as string) === 'admin' ? 'admin' : 'student') as UserRole;
+          const liveProfile: UserProfile = {
+            id: profile?.id || data.user.id,
+            email: profile?.email || cleanEmail,
+            full_name: profile?.full_name || cleanEmail.split('@')[0],
+            role,
+            is_all_access: Boolean(profile?.is_all_access),
+            all_access_end_date: profile?.all_access_end_date,
+            active_session_id: profile?.active_session_id,
+            active_session_device: profile?.active_session_device,
+            last_session_at: profile?.last_session_at,
+            created_at: profile?.created_at || new Date().toISOString(),
+            subscription_plan: profile?.is_all_access ? 'Membresía All-Access (Pase Total)' : 'Suscripción por Academia',
+            subscription_end_date: profile?.all_access_end_date || new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
+            subscription_status: 'active',
+          };
+
+          setUsers((prev) => {
+            const exists = prev.some((u) => u.id === liveProfile.id);
+            return exists ? prev.map((u) => (u.id === liveProfile.id ? liveProfile : u)) : [liveProfile, ...prev];
+          });
+          setCurrentUserId(liveProfile.id);
+
+          return {
+            ok: true,
+            message: `Bienvenido de nuevo, ${liveProfile.full_name}`,
+            role,
+          };
         }
       }
     }
-  };
 
-  const selectTenantBySlug = (slug: string) => {
-    const found = tenants.find((t) => t.slug.toLowerCase() === slug.toLowerCase());
-    if (found) selectTenantById(found.id);
-  };
-
-  const createTenant = (input: CreateTenantInput) => {
-    const cleanSlug = input.slug
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9-]/g, '-');
-
-    if (!input.name.trim() || !cleanSlug) {
-      return { ok: false, message: 'El nombre y el subdominio (slug) son obligatorios.' };
+    // Modo local / Fallback
+    const localMatch = users.find((u) => u.email.toLowerCase() === cleanEmail);
+    if (!localMatch) {
+      return { ok: false, message: 'No se encontró un usuario con ese correo electrónico.' };
     }
 
-    if (tenants.some((t) => t.slug === cleanSlug)) {
-      return { ok: false, message: 'Ese subdominio ya está registrado por otra academia.' };
+    const token = `sess-${Date.now()}`;
+    setLocalSessionToken(token);
+    setCurrentUserId(localMatch.id);
+    return {
+      ok: true,
+      message: `¡Bienvenido de nuevo, ${localMatch.full_name}!`,
+      role: localMatch.role,
+    };
+  };
+
+  const signUpWithEmail = async (email: string, password: string, fullName: string) => {
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanName = fullName.trim();
+
+    if (!cleanEmail || !password || !cleanName) {
+      return { ok: false, message: 'Completa todos los campos obligatorios.' };
     }
 
-    const newTenantId = `tenant-${Date.now()}`;
-    const newTenant: Tenant = {
-      id: newTenantId,
-      name: input.name.trim(),
-      slug: cleanSlug,
-      custom_domain: input.custom_domain?.trim() || null,
-      logo_url: null,
-      primary_color: input.primary_color || '#4F46E5',
-      secondary_color: '#0F172A',
-      accent_color: '#10B981',
-      tagline:
-        input.tagline.trim() ||
-        'Formación especializada de alto impacto bajo nuestra metodología exclusiva',
-      support_email: input.support_email.trim() || `soporte@${cleanSlug}.com`,
-      plan_name: input.plan_name || `Pack Reseller ${input.max_licenses} Licencias`,
-      plan_status: 'active',
-      max_licenses: Number(input.max_licenses) || 25,
-      used_licenses: 1,
-      is_active: true,
-      created_at: new Date().toISOString(),
-    };
+    if (isSupabaseLive) {
+      const supabase = createSupabaseBrowserClient();
+      if (supabase) {
+        const { data, error } = await supabase.auth.signUp({
+          email: cleanEmail,
+          password,
+          options: {
+            data: { full_name: cleanName },
+          },
+        });
 
-    const newAdmin: UserProfile = {
-      id: `user-admin-${Date.now()}`,
-      tenant_id: newTenantId,
-      role: 'reseller_admin',
-      full_name: `Admin ${input.name.trim()}`,
-      email: input.support_email.trim() || `admin@${cleanSlug}.com`,
-      is_active: true,
-      active_session_id: `sess-admin-${Date.now()}`,
-      active_session_device: 'Chrome • Windows',
-      last_session_at: new Date().toISOString(),
-      created_at: new Date().toISOString(),
-    };
+        if (error) {
+          return { ok: false, message: error.message };
+        }
 
-    const newStudentSession = `sess-stu-${Date.now()}`;
+        if (data.user) {
+          const isOwnerAdmin = cleanEmail === 'ceo@plataformalms.com';
+          const newLiveUser: UserProfile = {
+            id: data.user.id,
+            email: cleanEmail,
+            full_name: cleanName,
+            role: isOwnerAdmin ? 'admin' : 'student',
+            is_all_access: isOwnerAdmin,
+            all_access_end_date: isOwnerAdmin ? new Date(Date.now() + 10 * 365 * 24 * 3600 * 1000).toISOString() : null,
+            active_session_id: `sess-${Date.now()}`,
+            active_session_device: 'Este Navegador',
+            last_session_at: new Date().toISOString(),
+            created_at: new Date().toISOString(),
+            subscription_plan: isOwnerAdmin ? 'Membresía All-Access (Pase Total)' : 'Sin suscripción activa',
+            subscription_status: isOwnerAdmin ? 'active' : 'expired',
+          };
+
+          setUsers((prev) => [newLiveUser, ...prev]);
+          if (data.session) {
+            setCurrentUserId(newLiveUser.id);
+          }
+
+          return {
+            ok: true,
+            message: data.session
+              ? `¡Cuenta creada y autenticada con éxito! Bienvenido al campus, ${cleanName}.`
+              : '¡Cuenta registrada con éxito en Supabase! Ya puedes iniciar sesión con tu correo y contraseña.',
+          };
+        }
+      }
+    }
+
+    // Modo local / Fallback
     const newStudent: UserProfile = {
-      id: `user-stu-${Date.now()}`,
-      tenant_id: newTenantId,
+      id: `usr-${Date.now()}`,
+      email: cleanEmail,
+      full_name: cleanName,
       role: 'student',
-      full_name: `Alumno Fundador (${input.name.trim()})`,
-      email: `alumno1@${cleanSlug}.com`,
-      is_active: true,
-      active_session_id: newStudentSession,
-      active_session_device: 'Chrome • Windows',
+      is_all_access: false,
+      all_access_end_date: null,
+      active_session_id: `sess-${Date.now()}`,
+      active_session_device: 'Este Navegador',
       last_session_at: new Date().toISOString(),
       created_at: new Date().toISOString(),
+      subscription_plan: 'Sin suscripción activa',
+      subscription_status: 'expired',
+      subscribed_academy_ids: [],
     };
 
-    setTenants((prev) => [...prev, newTenant]);
-    setUsers((prev) => [...prev, newAdmin, newStudent]);
-
-    if (input.assigned_course_ids.length > 0) {
-      setCourses((prev) =>
-        prev.map((course) =>
-          input.assigned_course_ids.includes(course.id) &&
-          !course.assigned_tenant_ids.includes(newTenantId)
-            ? { ...course, assigned_tenant_ids: [...course.assigned_tenant_ids, newTenantId] }
-            : course
-        )
-      );
-    }
+    setUsers((prev) => [newStudent, ...prev]);
+    setCurrentUserId(newStudent.id);
 
     return {
       ok: true,
-      message: `Academia "${newTenant.name}" creada con éxito con ${newTenant.max_licenses} licencias habilitadas.`,
+      message: `¡Cuenta creada con éxito! Bienvenido a la plataforma, ${cleanName}.`,
     };
   };
 
-  const updateTenantBranding = (tenantId: string, input: UpdateBrandingInput) => {
-    setTenants((prev) =>
-      prev.map((t) =>
-        t.id === tenantId
-          ? {
-              ...t,
-              name: input.name.trim() || t.name,
-              slug: input.slug.trim().toLowerCase() || t.slug,
-              custom_domain: input.custom_domain?.trim() || null,
-              logo_url: input.logo_url?.trim() || null,
-              primary_color: input.primary_color || t.primary_color,
-              secondary_color: input.secondary_color || t.secondary_color,
-              accent_color: input.accent_color || t.accent_color,
-              tagline: input.tagline.trim() || t.tagline,
-              support_email: input.support_email.trim() || t.support_email,
-            }
-          : t
-      )
-    );
-    return {
-      ok: true,
-      message: 'Marca blanca actualizada en tiempo real.',
-    };
-  };
-
-  const updateTenantLicenseLimit = (tenantId: string, newMaxLicenses: number, planName?: string) => {
-    setTenants((prev) =>
-      prev.map((t) =>
-        t.id === tenantId
-          ? {
-              ...t,
-              max_licenses: Math.max(1, newMaxLicenses),
-              plan_name: planName || `Pack Reseller ${newMaxLicenses} Alumnos`,
-              plan_status: 'active',
-            }
-          : t
-      )
-    );
-  };
-
-  const toggleCourseForTenant = (tenantId: string, courseId: string) => {
-    setCourses((prev) =>
-      prev.map((course) => {
-        if (course.id !== courseId) return course;
-        const exists = course.assigned_tenant_ids.includes(tenantId);
-        return {
-          ...course,
-          assigned_tenant_ids: exists
-            ? course.assigned_tenant_ids.filter((id) => id !== tenantId)
-            : [...course.assigned_tenant_ids, tenantId],
-        };
-      })
-    );
-  };
-
-  const loginAsRole = (role: UserRole, tenantId?: string) => {
-    const targetTenantId = tenantId || currentTenant.id;
-    if (role === 'superadmin') {
-      const sa = users.find((u) => u.role === 'superadmin');
-      if (sa) setCurrentUserId(sa.id);
-      return;
+  const signOut = async () => {
+    if (isSupabaseLive) {
+      const supabase = createSupabaseBrowserClient();
+      if (supabase) {
+        await supabase.auth.signOut();
+      }
     }
+    setCurrentUserId(null);
+  };
 
-    const foundUser = users.find(
-      (u) => u.role === role && u.tenant_id === targetTenantId
-    );
-    if (foundUser) {
-      const newToken = `sess-${Date.now()}`;
-      setLocalSessionToken(newToken);
-      setUsers((prev) =>
-        prev.map((u) =>
-          u.id === foundUser.id
-            ? {
-                ...u,
-                active_session_id: newToken,
-                active_session_device: 'Este Navegador (Sesión Verificada)',
-                last_session_at: new Date().toISOString(),
-              }
-            : u
-        )
-      );
-      setCurrentUserId(foundUser.id);
+  // Conmutador rápido de rol para desarrollo/demostración
+  const loginAsRole = (role: UserRole) => {
+    if (role === 'admin') {
+      const admin = users.find((u) => u.role === 'admin') || users[0];
+      if (admin) setCurrentUserId(admin.id);
+    } else {
+      const student = users.find((u) => u.role === 'student') || users[1];
+      if (student) setCurrentUserId(student.id);
     }
   };
 
@@ -690,182 +594,19 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
     const cleanEmail = email.trim().toLowerCase();
     const matched = users.find((u) => u.email.toLowerCase() === cleanEmail);
     if (!matched) {
-      return {
-        ok: false,
-        message: 'No se encontró una cuenta con ese correo.',
-      };
+      return { ok: false, message: 'Usuario no encontrado.' };
     }
-
-    if (matched.role === 'student' && !matched.is_active) {
-      return {
-        ok: false,
-        message: 'Tu licencia de alumno se encuentra desactivada por tu academia.',
-      };
-    }
-
-    const newToken = `sess-${Date.now()}`;
-    setLocalSessionToken(newToken);
-    setUsers((prev) =>
-      prev.map((u) =>
-        u.id === matched.id
-          ? {
-              ...u,
-              active_session_id: newToken,
-              active_session_device: 'Este Navegador (Sesión Verificada)',
-              last_session_at: new Date().toISOString(),
-            }
-          : u
-      )
-    );
     setCurrentUserId(matched.id);
-    if (matched.tenant_id) {
-      setCurrentTenantId(matched.tenant_id);
-    }
-    return { ok: true, message: 'Sesión iniciada correctamente.', role: matched.role };
+    return { ok: true, message: `Sesión iniciada como ${matched.full_name}`, role: matched.role };
   };
 
   const logout = () => {
-    setCurrentUserId(null);
+    signOut();
   };
 
-  const createStudent = (input: CreateStudentInput) => {
-    const targetTenant = tenants.find((t) => t.id === input.tenant_id);
-    if (!targetTenant) {
-      return { ok: false, message: 'Academia no encontrada.' };
-    }
-
-    const activeStudentsCount = users.filter(
-      (u) => u.tenant_id === targetTenant.id && u.role === 'student' && u.is_active
-    ).length;
-
-    if (activeStudentsCount >= targetTenant.max_licenses) {
-      return {
-        ok: false,
-        message: `LÍMITE DE LICENCIAS ALCANZADO (${activeStudentsCount}/${targetTenant.max_licenses}). Debes desactivar a un alumno o ampliar tu plan de licencias.`,
-      };
-    }
-
-    const cleanEmail = input.email.trim().toLowerCase();
-    if (!input.full_name.trim() || !cleanEmail) {
-      return { ok: false, message: 'Ingresa el nombre completo y el correo del alumno.' };
-    }
-
-    if (users.some((u) => u.email.toLowerCase() === cleanEmail)) {
-      return { ok: false, message: 'Ya existe un usuario registrado con ese correo electrónico.' };
-    }
-
-    const newStudent: UserProfile = {
-      id: `student-${Date.now()}`,
-      tenant_id: targetTenant.id,
-      role: 'student',
-      full_name: input.full_name.trim(),
-      email: cleanEmail,
-      is_active: true,
-      active_session_id: `sess-init-${Date.now()}`,
-      active_session_device: 'Pendiente de primer ingreso',
-      last_session_at: new Date().toISOString(),
-      created_at: new Date().toISOString(),
-    };
-
-    const nextActiveCount = activeStudentsCount + 1;
-    setUsers((prev) => [...prev, newStudent]);
-    setTenants((prev) =>
-      prev.map((t) =>
-        t.id === targetTenant.id ? { ...t, used_licenses: nextActiveCount } : t
-      )
-    );
-
-    return {
-      ok: true,
-      message: `Alumno "${newStudent.full_name}" activado. Licencias en uso: ${nextActiveCount}/${targetTenant.max_licenses}.`,
-    };
-  };
-
-  const toggleStudentActiveStatus = (studentId: string) => {
-    const student = users.find((u) => u.id === studentId);
-    if (!student || !student.tenant_id) {
-      return { ok: false, message: 'Alumno no encontrado.' };
-    }
-
-    const targetTenant = tenants.find((t) => t.id === student.tenant_id);
-    if (!targetTenant) {
-      return { ok: false, message: 'Academia no encontrada.' };
-    }
-
-    const activeStudentsCount = users.filter(
-      (u) => u.tenant_id === targetTenant.id && u.role === 'student' && u.is_active
-    ).length;
-
-    if (!student.is_active && activeStudentsCount >= targetTenant.max_licenses) {
-      return {
-        ok: false,
-        message: `BLOQUEO DE LICENCIAS: Ya tienes ${activeStudentsCount} de ${targetTenant.max_licenses} licencias ocupadas.`,
-      };
-    }
-
-    const nextState = !student.is_active;
-    const nextActiveCount = nextState ? activeStudentsCount + 1 : Math.max(0, activeStudentsCount - 1);
-
-    setUsers((prev) =>
-      prev.map((u) =>
-        u.id === studentId
-          ? {
-              ...u,
-              is_active: nextState,
-              active_session_id: nextState ? u.active_session_id : null,
-            }
-          : u
-      )
-    );
-
-    setTenants((prev) =>
-      prev.map((t) =>
-        t.id === targetTenant.id ? { ...t, used_licenses: nextActiveCount } : t
-      )
-    );
-
-    return {
-      ok: true,
-      message: nextState
-        ? `Licencia activada para ${student.full_name} (${nextActiveCount}/${targetTenant.max_licenses}).`
-        : `Alumno ${student.full_name} dado de baja. Se liberó 1 licencia (${nextActiveCount}/${targetTenant.max_licenses}).`,
-    };
-  };
-
-  const simulateConcurrentLoginFromOtherDevice = () => {
-    if (!currentUser) return;
-    const intruderToken = `sess-intruder-${Date.now()}`;
-    setUsers((prev) =>
-      prev.map((u) =>
-        u.id === currentUser.id
-          ? {
-              ...u,
-              active_session_id: intruderToken,
-              active_session_device: 'Smart TV / iPhone 16 Pro (IP: 190.24.118.42 - Otra Ubicación)',
-              last_session_at: new Date().toISOString(),
-            }
-          : u
-      )
-    );
-  };
-
-  const reclaimCurrentDeviceSession = () => {
-    if (!currentUser) return;
-    const reclaimedToken = `sess-reclaimed-${Date.now()}`;
-    setLocalSessionToken(reclaimedToken);
-    setUsers((prev) =>
-      prev.map((u) =>
-        u.id === currentUser.id
-          ? {
-              ...u,
-              active_session_id: reclaimedToken,
-              active_session_device: 'Este Navegador (Sesión Recuperada)',
-              last_session_at: new Date().toISOString(),
-            }
-          : u
-      )
-    );
-  };
+  // =========================================================================
+  // GESTIÓN DE CURSOS Y CLASES
+  // =========================================================================
 
   const createCourse = (input: CreateCourseInput) => {
     if (!input.title.trim()) {
@@ -879,81 +620,78 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-');
 
-    const initialLessons: Lesson[] = input.lesson_title?.trim()
-      ? [
-          {
-            id: `les-${Date.now()}`,
-            module_id: moduleId,
-            course_id: courseId,
-            title: input.lesson_title.trim(),
-            description: 'Clase en video alojada en Bunny.net Stream.',
-            video_provider: input.video_provider || 'bunny',
-            video_id: input.video_id?.trim() || 'stream-001',
-            video_embed_url:
-              input.video_embed_url?.trim() ||
-              'https://iframe.mediadelivery.net/embed/808934/stream-001',
-            duration_minutes: 5,
-            resource_url: '/recursos/guia-clase.pdf',
-            is_free_preview: true,
-            sort_order: 1,
-          },
-        ]
-      : [];
-
     const newCourse: Course = {
       id: courseId,
-      owner_tenant_id: null,
+      academy_id: input.academy_id || currentAcademy.id,
       title: input.title.trim(),
       slug,
-      subtitle: input.subtitle.trim() || 'Curso práctico organizado por subtemas',
-      description: input.description.trim() || input.subtitle.trim(),
-      category: input.category || 'Diseño & Edición Profesional',
-      level: input.level || 'Intermedio',
-      duration_label: input.duration_label || 'Curso Completo',
+      subtitle: input.subtitle.trim() || 'Curso completo con videos y recursos prácticos.',
+      description: input.description.trim() || input.title.trim(),
+      thumbnail_url: null,
+      category: input.category || 'Productividad',
+      level: input.level || 'Todos los niveles',
+      duration_label: input.duration_label || '6h 30m',
       is_published: true,
-      assigned_tenant_ids:
-        input.assigned_tenant_ids.length > 0
-          ? input.assigned_tenant_ids
-          : tenants.map((t) => t.id),
-      modules: [
-        {
-          id: moduleId,
-          course_id: courseId,
-          title: input.module_title.trim() || 'Subtema 1: Introducción',
-          description: 'Primer bloque temático del curso',
-          sort_order: 1,
-          lessons: initialLessons,
-        },
-      ],
+      assigned_tenant_ids: [input.academy_id || currentAcademy.id],
+      modules:
+        input.initial_modules && input.initial_modules.length > 0
+          ? input.initial_modules.map((m, idx) => ({
+              id: `mod-${Date.now()}-${idx}`,
+              course_id: courseId,
+              title: m.title.trim(),
+              description: m.description?.trim() || 'Contenido estructurado para dominar las bases.',
+              is_subtema_zero: Boolean(m.is_subtema_zero),
+              sort_order: idx + 1,
+              lessons: [],
+            }))
+          : [
+              {
+                id: moduleId,
+                course_id: courseId,
+                title: (input.module_title || 'Tema 1: Fundamentos Esenciales').trim(),
+                description: 'Contenido estructurado para dominar las bases.',
+                sort_order: 1,
+                lessons: input.lesson_title?.trim()
+                  ? [
+                      {
+                        id: `lesson-${Date.now()}`,
+                        module_id: moduleId,
+                        course_id: courseId,
+                        title: input.lesson_title.trim(),
+                        description: 'Primera lección práctica.',
+                        video_provider: input.video_provider || 'bunny',
+                        video_id: input.video_id || '',
+                        video_embed_url:
+                          input.video_embed_url ||
+                          'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+                        duration_minutes: 10,
+                        resource_url: null,
+                        is_free_preview: true,
+                        sort_order: 1,
+                      },
+                    ]
+                  : [],
+              },
+            ],
     };
 
     setCourses((prev) => [newCourse, ...prev]);
-    return {
-      ok: true,
-      message: `Curso "${newCourse.title}" creado con su primer Tema. Ahora puedes agregarle todos los temas y videos que quieras.`,
-      courseId,
-    };
+    return { ok: true, message: `Curso "${newCourse.title}" creado con éxito.`, courseId };
   };
 
   const renameCourse = (courseId: string, newTitle: string, newSubtitle?: string) => {
-    if (!newTitle.trim()) {
-      return { ok: false, message: 'El nombre del curso no puede estar vacío.' };
-    }
     setCourses((prev) =>
       prev.map((c) =>
         c.id === courseId
           ? {
               ...c,
-              title: newTitle.trim(),
-              subtitle: newSubtitle !== undefined ? newSubtitle.trim() : c.subtitle,
+              title: newTitle.trim() || c.title,
+              subtitle: newSubtitle?.trim() || c.subtitle,
             }
           : c
       )
     );
-    return {
-      ok: true,
-      message: `Nombre del curso actualizado a "${newTitle.trim()}".`,
-    };
+    return { ok: true, message: 'Curso actualizado.' };
   };
 
   const deleteCourse = (courseId: string) => {
@@ -961,120 +699,26 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
   };
 
   const addModuleToCourse = (input: AddModuleInput) => {
-    if (!input.title.trim()) {
-      return { ok: false, message: 'Escribe el nombre del Tema.' };
-    }
-
-    const newModuleId = `mod-${Date.now()}`;
+    const moduleId = `mod-${Date.now()}`;
     setCourses((prev) =>
-      prev.map((course) => {
-        if (course.id !== input.course_id) return course;
-        const nextOrder = input.is_subtema_zero ? 0 : course.modules.length + 1;
-        const newMod: CourseModule = {
-          id: newModuleId,
-          course_id: course.id,
+      prev.map((c) => {
+        if (c.id !== input.course_id) return c;
+        const newModule: CourseModule = {
+          id: moduleId,
+          course_id: c.id,
           title: input.title.trim(),
-          description: input.description?.trim() || 'Tema del curso',
-          sort_order: nextOrder,
+          description: input.description?.trim() || '',
+          sort_order: c.modules.length + 1,
           is_subtema_zero: Boolean(input.is_subtema_zero),
           lessons: [],
         };
-        if (input.is_subtema_zero) {
-          // Colocar el Tema 0 al inicio y desmarcar otros si hubiera
-          const cleaned = course.modules.map((m) => ({
-            ...m,
-            is_subtema_zero: false,
-          }));
-          return {
-            ...course,
-            modules: [newMod, ...cleaned],
-          };
-        }
-        return {
-          ...course,
-          modules: [...course.modules, newMod],
-        };
+        return { ...c, modules: [...c.modules, newModule] };
       })
     );
-
-    return {
-      ok: true,
-      message: input.is_subtema_zero
-        ? `Tema 0 "${input.title.trim()}" (Introducción) creado al inicio del curso.`
-        : `Tema "${input.title.trim()}" creado exitosamente. Ya puedes meterle videos de Bunny.`,
-      moduleId: newModuleId,
-    };
-  };
-
-  const toggleModuleSubtemaZero = (courseId: string, moduleId: string) => {
-    let wasTurnedOn = false;
-    let modTitle = '';
-
-    setCourses((prev) =>
-      prev.map((c) => {
-        if (c.id !== courseId) return c;
-        const target = c.modules.find((m) => m.id === moduleId);
-        if (!target) return c;
-
-        wasTurnedOn = !target.is_subtema_zero;
-        modTitle = target.title;
-
-        const updated = c.modules.map((m) => {
-          if (m.id === moduleId) {
-            return { ...m, is_subtema_zero: wasTurnedOn };
-          }
-          // Solo un Tema 0 por curso
-          return wasTurnedOn ? { ...m, is_subtema_zero: false } : m;
-        });
-
-        // Si se activa como Tema 0, lo subimos al primer lugar del curso automáticamente
-        if (wasTurnedOn) {
-          const zeroMod = updated.find((m) => m.id === moduleId);
-          const rest = updated.filter((m) => m.id !== moduleId);
-          return {
-            ...c,
-            modules: zeroMod ? [zeroMod, ...rest] : updated,
-          };
-        }
-
-        return { ...c, modules: updated };
-      })
-    );
-
-    return {
-      ok: true,
-      message: wasTurnedOn
-        ? `El tema "${modTitle}" quedó marcado como Tema 0 (Introducción) al inicio del curso.`
-        : `El tema "${modTitle}" volvió a la numeración normal (Tema 1, 2...).`,
-    };
-  };
-
-  const sortModuleLessonsAlphabetically = (courseId: string, moduleId: string) => {
-    setCourses((prev) =>
-      prev.map((c) => {
-        if (c.id !== courseId) return c;
-        return {
-          ...c,
-          modules: c.modules.map((m) => {
-            if (m.id !== moduleId) return m;
-            const sorted = [...m.lessons].sort((a, b) =>
-              compareLessonTitles(a.title, b.title)
-            );
-            return { ...m, lessons: sorted };
-          }),
-        };
-      })
-    );
-    return {
-      ok: true,
-      message: 'Videos del tema ordenados en orden numérico y alfabético (0-9 / A-Z).',
-    };
+    return { ok: true, message: 'Módulo agregado.', moduleId };
   };
 
   const renameModuleInCourse = (courseId: string, moduleId: string, newTitle: string) => {
-    if (!newTitle.trim()) {
-      return { ok: false, message: 'El nombre del Tema no puede estar vacío.' };
-    }
     setCourses((prev) =>
       prev.map((c) => {
         if (c.id !== courseId) return c;
@@ -1086,17 +730,47 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
         };
       })
     );
-    return {
-      ok: true,
-      message: `Tema renombrado a "${newTitle.trim()}".`,
-    };
+    return { ok: true, message: 'Módulo renombrado.' };
   };
 
-  const reorderModuleInCourse = (
-    courseId: string,
-    moduleId: string,
-    direction: 'up' | 'down'
-  ) => {
+  const toggleModuleSubtemaZero = (courseId: string, moduleId: string) => {
+    setCourses((prev) =>
+      prev.map((c) => {
+        if (c.id !== courseId) return c;
+        return {
+          ...c,
+          modules: c.modules.map((m) =>
+            m.id === moduleId ? { ...m, is_subtema_zero: !m.is_subtema_zero } : m
+          ),
+        };
+      })
+    );
+    return { ok: true, message: 'Estado de subtema cero actualizado.' };
+  };
+
+  const sortModuleLessonsAlphabetically = (courseId: string, moduleId: string) => {
+    setCourses((prev) =>
+      prev.map((c) => {
+        if (c.id !== courseId) return c;
+        return {
+          ...c,
+          modules: c.modules.map((m) => {
+            if (m.id !== moduleId) return m;
+            const sorted = [...m.lessons].sort((a, b) =>
+              a.title.localeCompare(b.title, 'es', { numeric: true, sensitivity: 'base' })
+            );
+            return {
+              ...m,
+              lessons: sorted.map((l, idx) => ({ ...l, sort_order: idx + 1 })),
+            };
+          }),
+        };
+      })
+    );
+    return { ok: true, message: 'Lecciones ordenadas alfabéticamente.' };
+  };
+
+  const reorderModuleInCourse = (courseId: string, moduleId: string, direction: 'up' | 'down') => {
     setCourses((prev) =>
       prev.map((c) => {
         if (c.id !== courseId) return c;
@@ -1105,9 +779,13 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
         const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
         if (targetIdx < 0 || targetIdx >= c.modules.length) return c;
         const copy = [...c.modules];
-        const [moved] = copy.splice(idx, 1);
-        copy.splice(targetIdx, 0, moved);
-        return { ...c, modules: copy };
+        const temp = copy[idx];
+        copy[idx] = copy[targetIdx];
+        copy[targetIdx] = temp;
+        return {
+          ...c,
+          modules: copy.map((m, i) => ({ ...m, sort_order: i + 1 })),
+        };
       })
     );
   };
@@ -1125,139 +803,86 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
   };
 
   const addLessonToCourse = (input: AddLessonInput) => {
-    if (!input.title.trim()) {
-      return { ok: false, message: 'El título de la clase es obligatorio.' };
-    }
-
-    const newLesson: Lesson = {
-      id: `lesson-${Date.now()}`,
-      module_id: input.module_id,
-      course_id: input.course_id,
-      title: input.title.trim(),
-      description: input.description.trim() || 'Clase práctica paso a paso.',
-      video_provider: input.video_provider,
-      video_id: input.video_id.trim() || 'video-id',
-      video_embed_url:
-        input.video_embed_url.trim() ||
-        `https://iframe.mediadelivery.net/embed/808934/${input.video_id.trim()}?autoplay=false&preload=true&responsive=true`,
-      duration_minutes: Number(input.duration_minutes) || 3,
-      resource_url: '/recursos/material-complementario.pdf',
-      is_free_preview: false,
-      sort_order: 99,
-    };
-
     setCourses((prev) =>
       prev.map((c) => {
         if (c.id !== input.course_id) return c;
         return {
           ...c,
-          modules: c.modules.map((m) =>
-            m.id === input.module_id
-              ? { ...m, lessons: [...m.lessons, newLesson] }
-              : m
-          ),
+          modules: c.modules.map((m) => {
+            if (m.id !== input.module_id) return m;
+            const newLesson: Lesson = {
+              id: `lesson-${Date.now()}`,
+              module_id: m.id,
+              course_id: c.id,
+              title: input.title.trim(),
+              description: input.description.trim(),
+              video_provider: input.video_provider,
+              video_id: input.video_id,
+              video_embed_url: input.video_embed_url,
+              duration_minutes: input.duration_minutes || 10,
+              is_free_preview: false,
+              sort_order: m.lessons.length + 1,
+            };
+            return { ...m, lessons: [...m.lessons, newLesson] };
+          }),
         };
       })
     );
-
-    return {
-      ok: true,
-      message: `Clase "${newLesson.title}" agregada exitosamente al Tema.`,
-    };
+    return { ok: true, message: 'Lección agregada.' };
   };
 
-  const renameLessonInCourse = (
-    courseId: string,
-    moduleId: string,
-    lessonId: string,
-    newTitle: string
-  ) => {
-    if (!newTitle.trim()) {
-      return { ok: false, message: 'El nombre de la clase no puede estar vacío.' };
-    }
+  const renameLessonInCourse = (courseId: string, moduleId: string, lessonId: string, newTitle: string) => {
     setCourses((prev) =>
       prev.map((c) => {
         if (c.id !== courseId) return c;
-        return {
-          ...c,
-          modules: c.modules.map((m) =>
-            m.id === moduleId
-              ? {
-                  ...m,
-                  lessons: m.lessons.map((l) =>
-                    l.id === lessonId ? { ...l, title: newTitle.trim() } : l
-                  ),
-                }
-              : m
-          ),
-        };
-      })
-    );
-    return {
-      ok: true,
-      message: `Clase renombrada a "${newTitle.trim()}".`,
-    };
-  };
-
-  // Mover un video/clase de un Tema a otro con 1 clic
-  const moveLessonToModule = (
-    courseId: string,
-    lessonId: string,
-    targetModuleId: string
-  ) => {
-    let movedTitle = '';
-    let destTitle = '';
-
-    setCourses((prev) =>
-      prev.map((c) => {
-        if (c.id !== courseId) return c;
-        let foundLesson: Lesson | null = null;
-
-        for (const m of c.modules) {
-          const hit = m.lessons.find((l) => l.id === lessonId);
-          if (hit) {
-            foundLesson = { ...hit, module_id: targetModuleId };
-            movedTitle = hit.title;
-            break;
-          }
-        }
-
-        if (!foundLesson) return c;
-
-        const targetMod = c.modules.find((m) => m.id === targetModuleId);
-        if (targetMod) destTitle = targetMod.title;
-
         return {
           ...c,
           modules: c.modules.map((m) => {
-            const withoutLesson = m.lessons.filter((l) => l.id !== lessonId);
-            if (m.id === targetModuleId && foundLesson) {
-              return {
-                ...m,
-                lessons: [...withoutLesson, foundLesson],
-              };
-            }
+            if (m.id !== moduleId) return m;
             return {
               ...m,
-              lessons: withoutLesson,
+              lessons: m.lessons.map((l) =>
+                l.id === lessonId ? { ...l, title: newTitle.trim() } : l
+              ),
             };
           }),
         };
       })
     );
-
-    return {
-      ok: true,
-      message: `Video "${movedTitle}" movido al Tema "${destTitle}".`,
-    };
+    return { ok: true, message: 'Lección renombrada.' };
   };
 
-  const reorderLessonInModule = (
-    courseId: string,
-    moduleId: string,
-    lessonId: string,
-    direction: 'up' | 'down'
-  ) => {
+  const moveLessonToModule = (courseId: string, lessonId: string, targetModuleId: string) => {
+    setCourses((prev) =>
+      prev.map((c) => {
+        if (c.id !== courseId) return c;
+        let lessonToMove: Lesson | null = null;
+        const cleanedModules = c.modules.map((m) => {
+          const found = m.lessons.find((l) => l.id === lessonId);
+          if (found) {
+            lessonToMove = { ...found, module_id: targetModuleId };
+            return { ...m, lessons: m.lessons.filter((l) => l.id !== lessonId) };
+          }
+          return m;
+        });
+
+        if (!lessonToMove) return c;
+
+        return {
+          ...c,
+          modules: cleanedModules.map((m) => {
+            if (m.id === targetModuleId) {
+              return { ...m, lessons: [...m.lessons, lessonToMove!] };
+            }
+            return m;
+          }),
+        };
+      })
+    );
+    return { ok: true, message: 'Lección trasladada de módulo.' };
+  };
+
+  const reorderLessonInModule = (courseId: string, moduleId: string, lessonId: string, direction: 'up' | 'down') => {
     setCourses((prev) =>
       prev.map((c) => {
         if (c.id !== courseId) return c;
@@ -1270,9 +895,13 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
             const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
             if (targetIdx < 0 || targetIdx >= m.lessons.length) return m;
             const copy = [...m.lessons];
-            const [moved] = copy.splice(idx, 1);
-            copy.splice(targetIdx, 0, moved);
-            return { ...m, lessons: copy };
+            const temp = copy[idx];
+            copy[idx] = copy[targetIdx];
+            copy[targetIdx] = temp;
+            return {
+              ...m,
+              lessons: copy.map((l, i) => ({ ...l, sort_order: i + 1 })),
+            };
           }),
         };
       })
@@ -1295,94 +924,213 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
+  const assignBunnyVideosToSubtema = (courseId: string, targetModuleId: string, videos: BunnyRemoteVideo[]) => {
+    setCourses((prev) =>
+      prev.map((c) => {
+        if (c.id !== courseId) return c;
+        return {
+          ...c,
+          modules: c.modules.map((m) => {
+            if (m.id !== targetModuleId) return m;
+            const newLessons: Lesson[] = videos.map((v, i) => ({
+              id: `bunny-lesson-${v.guid}`,
+              module_id: targetModuleId,
+              course_id: courseId,
+              title: v.title,
+              description: `Video de Bunny.net Stream (GUID: ${v.guid})`,
+              video_provider: 'bunny',
+              video_id: v.guid,
+              video_embed_url: v.embedUrl,
+              duration_minutes: v.durationMinutes || 10,
+              is_free_preview: i === 0,
+              sort_order: m.lessons.length + i + 1,
+            }));
+            return { ...m, lessons: [...m.lessons, ...newLessons] };
+          }),
+        };
+      })
+    );
+    return { ok: true, message: `${videos.length} videos de Bunny.net asignados al tema.` };
+  };
+
+  const syncBunnyVideosIntoCourse = async (courseId: string, targetModuleId?: string) => {
+    try {
+      const res = await fetch('/api/bunny/videos');
+      if (!res.ok) throw new Error('No se pudo conectar con Bunny.net');
+      const data = await res.json();
+      const videos: BunnyRemoteVideo[] = data.videos || [];
+      if (videos.length === 0) return { ok: false, message: 'No hay videos en tu biblioteca Bunny.net', addedCount: 0, totalBunnyCount: 0 };
+
+      const targetCourse = courses.find((c) => c.id === courseId);
+      const modId = targetModuleId || targetCourse?.modules[0]?.id;
+      if (!modId) return { ok: false, message: 'Crea un módulo primero', addedCount: 0, totalBunnyCount: videos.length };
+
+      assignBunnyVideosToSubtema(courseId, modId, videos);
+      return { ok: true, message: `Se importaron ${videos.length} videos de Bunny.net con éxito.`, addedCount: videos.length, totalBunnyCount: videos.length };
+    } catch (e: any) {
+      return { ok: false, message: e.message || 'Error al sincronizar con Bunny.net', addedCount: 0, totalBunnyCount: 0 };
+    }
+  };
+
   const toggleLessonCompleted = (lessonId: string) => {
     setCompletedLessonIds((prev) =>
-      prev.includes(lessonId)
-        ? prev.filter((id) => id !== lessonId)
-        : [...prev, lessonId]
+      prev.includes(lessonId) ? prev.filter((id) => id !== lessonId) : [...prev, lessonId]
     );
   };
 
-  const triggerSimulatedWebhook = (
-    provider: 'stripe' | 'mercadopago',
-    tenantId: string,
-    licensesToAdd: number
-  ) => {
-    const targetTenant = tenants.find((t) => t.id === tenantId);
-    if (!targetTenant) return;
+  // =========================================================================
+  // CONTROL ANTI-COMPARTIR CUENTA (Sesión Única)
+  // =========================================================================
 
-    const updatedMax = targetTenant.max_licenses + licensesToAdd;
-    updateTenantLicenseLimit(
-      tenantId,
-      updatedMax,
-      `Pack Reseller ${updatedMax} Alumnos (${provider === 'stripe' ? 'Stripe' : 'Mercado Pago'})`
+  const reclaimCurrentDeviceSession = () => {
+    if (!currentUser) return;
+    const newToken = `sess-reclaimed-${Date.now()}`;
+    setLocalSessionToken(newToken);
+    setUsers((prev) =>
+      prev.map((u) =>
+        u.id === currentUser.id
+          ? {
+              ...u,
+              active_session_id: newToken,
+              active_session_device: 'Este Navegador (Sesión Reclamada)',
+              last_session_at: new Date().toISOString(),
+            }
+          : u
+      )
     );
+  };
 
-    const newLog: SubscriptionWebhookLog = {
-      id: `wh-${Date.now()}`,
-      provider,
-      external_event_id:
-        provider === 'stripe'
-          ? `evt_${Math.random().toString(36).substring(2, 12)}`
-          : `mp_pay_${Math.floor(100000000 + Math.random() * 900000000)}`,
-      event_type:
-        provider === 'stripe'
-          ? 'checkout.session.completed'
-          : 'subscription_preapproval.updated',
-      tenant_id: tenantId,
-      summary: `${targetTenant.name} amplió +${licensesToAdd} licencias vía webhook (${updatedMax} totales)`,
-      processed_at: new Date().toISOString(),
+  const simulateConcurrentLoginFromOtherDevice = () => {
+    if (!currentUser) return;
+    const intruderToken = `sess-intruder-${Date.now()}`;
+    setUsers((prev) =>
+      prev.map((u) =>
+        u.id === currentUser.id
+          ? {
+              ...u,
+              active_session_id: intruderToken,
+              active_session_device: 'iPhone 16 Pro • Safari (IP: 190.24.118.42 - Otra Ciudad)',
+              last_session_at: new Date().toISOString(),
+            }
+          : u
+      )
+    );
+  };
+
+  // =========================================================================
+  // SUSCRIPCIONES Y PAGOS GLOBALES
+  // =========================================================================
+
+  const updateGlobalPaymentSettings = (settings: Partial<GlobalPaymentSettings>) => {
+    setGlobalPaymentSettings((prev) => ({
+      ...prev,
+      ...settings,
+      updated_at: new Date().toISOString(),
+    }));
+  };
+
+  const renewSubscription = (studentId: string, planName?: string, additionalDays: number = 30) => {
+    const student = users.find((u) => u.id === studentId);
+    if (!student) return { ok: false, message: 'Alumno no encontrado.' };
+
+    const now = new Date();
+    const currentEnd = student.subscription_end_date ? new Date(student.subscription_end_date) : now;
+    const baseDate = currentEnd > now ? currentEnd : now;
+    const newEndDate = new Date(baseDate.getTime() + additionalDays * 24 * 3600 * 1000);
+
+    const isAllAccess = Boolean(planName?.includes('All-Access') || additionalDays >= 365);
+
+    const newPaymentRecord = {
+      id: `REC-${Date.now().toString().slice(-6)}`,
+      date: new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }),
+      description: planName || (isAllAccess ? 'Membresía All-Access Anual' : 'Suscripción Academia'),
+      amount: additionalDays >= 365 ? '$240.00' : additionalDays >= 90 ? '$89.00' : '$29.00',
+      currency: 'USD',
+      status: 'paid' as const,
+      payment_method: 'Mercado Pago',
     };
 
-    setWebhookLogs((prev) => [newLog, ...prev]);
+    setUsers((prev) =>
+      prev.map((u) =>
+        u.id === studentId
+          ? {
+              ...u,
+              subscription_plan: planName || (isAllAccess ? 'Membresía All-Access' : u.subscription_plan),
+              subscription_end_date: newEndDate.toISOString(),
+              subscription_status: 'active',
+              is_all_access: isAllAccess || u.is_all_access,
+              all_access_end_date: isAllAccess ? newEndDate.toISOString() : u.all_access_end_date,
+              payment_history: [newPaymentRecord, ...(u.payment_history || [])],
+            }
+          : u
+      )
+    );
+
+    return {
+      ok: true,
+      message: `¡Suscripción reactivada con éxito! Acceso vigente hasta el ${newEndDate.toLocaleDateString('es-ES', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      })}.`,
+    };
+  };
+
+  const setStudentRemainingDays = (studentId: string, daysRemaining: number) => {
+    const targetDate = new Date(Date.now() + daysRemaining * 24 * 3600 * 1000);
+    const status = daysRemaining < 0 ? 'expired' : daysRemaining <= 7 ? 'expiring_soon' : 'active';
+
+    setUsers((prev) =>
+      prev.map((u) =>
+        u.id === studentId
+          ? {
+              ...u,
+              subscription_end_date: targetDate.toISOString(),
+              subscription_status: status,
+              all_access_end_date: u.is_all_access ? targetDate.toISOString() : u.all_access_end_date,
+            }
+          : u
+      )
+    );
   };
 
   const resetDemoData = () => {
-    localStorage.removeItem(STORAGE_KEYS.TENANTS);
-    localStorage.removeItem(STORAGE_KEYS.USERS);
-    localStorage.removeItem(STORAGE_KEYS.COURSES);
-    localStorage.removeItem(STORAGE_KEYS.CURRENT_TENANT_ID);
-    localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ID);
-    localStorage.removeItem(STORAGE_KEYS.COMPLETED_LESSONS);
-    localStorage.removeItem(STORAGE_KEYS.WEBHOOK_LOGS);
-    localStorage.removeItem(STORAGE_KEYS.LOCAL_SESSION_TOKEN);
-    setTenants(INITIAL_TENANTS);
+    localStorage.clear();
+    setAcademies(INITIAL_ACADEMIES);
     setUsers(INITIAL_USERS);
     setCourses(INITIAL_COURSES);
-    setWebhookLogs(INITIAL_WEBHOOK_LOGS);
-    setCurrentTenantId(INITIAL_TENANTS[1].id);
-    setCurrentUserId(INITIAL_USERS[2].id);
-    setLocalSessionToken('sess-st-laura-991');
+    setCurrentAcademyId(INITIAL_ACADEMIES[0].id);
+    setCurrentUserId(INITIAL_USERS[1].id);
+    setCompletedLessonIds(['eeee1111-1111-1111-1111-111111111111']);
+    setGlobalPaymentSettings(INITIAL_GLOBAL_PAYMENT_SETTINGS);
   };
 
   return (
     <LMSContext.Provider
       value={{
         isSupabaseLive,
-        tenants,
-        currentTenant,
+        academies,
+        currentAcademy,
+        selectAcademyById,
+        selectAcademyBySlug,
+        createAcademy,
+        updateAcademy,
+        // Retrocompatibilidad
+        tenants: academies,
+        currentTenant: currentAcademy,
+        selectTenantById: selectAcademyById,
+        selectTenantBySlug: selectAcademyBySlug,
         users,
         currentUser,
-        courses,
-        tenantCourses,
-        webhookLogs,
-        completedLessonIds,
-        localSessionToken,
-        isSessionDisplaced,
-        displacedByDevice,
-        selectTenantById,
-        selectTenantBySlug,
-        createTenant,
-        updateTenantBranding,
-        updateTenantLicenseLimit,
-        toggleCourseForTenant,
+        signInWithEmail,
+        signUpWithEmail,
+        signOut,
         loginAsRole,
         loginWithCredentials,
         logout,
-        createStudent,
-        toggleStudentActiveStatus,
-        simulateConcurrentLoginFromOtherDevice,
-        reclaimCurrentDeviceSession,
+        courses,
+        academyCourses,
+        tenantCourses: academyCourses,
         createCourse,
         renameCourse,
         deleteCourse,
@@ -1399,8 +1147,21 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
         deleteLessonFromCourse,
         assignBunnyVideosToSubtema,
         syncBunnyVideosIntoCourse,
+        completedLessonIds,
         toggleLessonCompleted,
-        triggerSimulatedWebhook,
+        isClassroomFocusMode,
+        setIsClassroomFocusMode,
+        localSessionToken,
+        isSessionDisplaced,
+        displacedByDevice,
+        reclaimCurrentDeviceSession,
+        simulateConcurrentLoginFromOtherDevice,
+        globalPaymentSettings,
+        updateGlobalPaymentSettings,
+        renewSubscription,
+        setStudentRemainingDays,
+        hasAccessToAcademy,
+        webhookLogs,
         resetDemoData,
       }}
     >
@@ -1412,7 +1173,7 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
 export function useLMS() {
   const context = useContext(LMSContext);
   if (!context) {
-    throw new Error('useLMS debe usarse dentro de un LMSProvider');
+    throw new Error('useLMS debe ser usado dentro de un LMSProvider');
   }
   return context;
 }

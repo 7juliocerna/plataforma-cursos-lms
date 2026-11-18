@@ -5,302 +5,323 @@ import { useRouter } from 'next/navigation';
 import { useLMS } from '@/context/LMSContext';
 import {
   AlertCircle,
-  Building2,
   CheckCircle2,
   Crown,
+  Database,
+  FileSpreadsheet,
   GraduationCap,
-  Layers,
   Lock,
   Mail,
   ShieldCheck,
+  Sparkles,
+  User,
 } from 'lucide-react';
 
-export default function WhiteLabelLoginPage() {
+export default function LoginPage() {
   const router = useRouter();
   const {
-    tenants,
-    currentTenant,
-    users,
-    selectTenantById,
+    isSupabaseLive,
+    signInWithEmail,
+    signUpWithEmail,
     loginAsRole,
-    loginWithCredentials,
   } = useLMS();
 
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('laura.gomez@agencia.co');
-  const [password, setPassword] = useState('••••••••••••');
+  const [password, setPassword] = useState('password123');
+  const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState<{ ok: boolean; message: string } | null>(null);
 
-  const tenantStudents = users.filter(
-    (u) => u.tenant_id === currentTenant.id && u.role === 'student'
-  );
-  const tenantAdmin = users.find(
-    (u) => u.tenant_id === currentTenant.id && u.role === 'reseller_admin'
-  );
-
-  const handleFormSubmit = (e: React.FormEvent) => {
+  const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = loginWithCredentials(email);
-    setFeedback(res);
-    if (res.ok) {
-      setTimeout(() => {
-        if (res.role === 'superadmin') router.push('/superadmin');
-        else if (res.role === 'reseller_admin') router.push('/reseller');
-        else router.push('/student');
-      }, 500);
+    setLoading(true);
+    setFeedback(null);
+
+    try {
+      if (authMode === 'login') {
+        const res = await signInWithEmail(email, password);
+        setFeedback(res);
+        if (res.ok) {
+          setTimeout(() => {
+            if (res.role === 'admin') router.push('/superadmin');
+            else router.push('/student');
+          }, 600);
+        }
+      } else {
+        const res = await signUpWithEmail(email, password, fullName);
+        setFeedback(res);
+        if (res.ok) {
+          setTimeout(() => {
+            router.push('/student');
+          }, 800);
+        }
+      }
+    } catch (err: any) {
+      setFeedback({ ok: false, message: err?.message || 'Error durante la autenticación.' });
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleQuickRoleAccess = (role: 'superadmin' | 'reseller_admin' | 'student') => {
-    loginAsRole(role, currentTenant.id);
-    if (role === 'superadmin') router.push('/superadmin');
-    if (role === 'reseller_admin') router.push('/reseller');
-    if (role === 'student') router.push('/student');
+  const handleQuickAccess = (emailToUse: string, roleToUse: 'admin' | 'student') => {
+    setEmail(emailToUse);
+    setPassword('password123');
+    loginAsRole(roleToUse);
+    setFeedback({
+      ok: true,
+      message: `Acceso rápido como ${roleToUse === 'admin' ? 'Administrador Dueño' : 'Alumno'}... Redirigiendo.`,
+    });
+    setTimeout(() => {
+      if (roleToUse === 'admin') router.push('/superadmin');
+      else router.push('/student');
+    }, 400);
   };
 
   return (
-    <div className="min-h-[calc(100vh-7rem)] bg-slate-950 px-4 py-12">
-      <div className="mx-auto grid max-w-6xl items-start gap-10 lg:grid-cols-12">
-        {/* Columna Izquierda: Tarjeta de Login Marca Blanca del Reseller */}
-        <div className="lg:col-span-6">
-          <div className="overflow-hidden rounded-3xl border border-slate-800 bg-slate-900/90 shadow-2xl">
-            {/* Banda Superior con el Color Primario del Tenant */}
-            <div
-              className="px-8 py-7 text-white"
-              style={{
-                background: `linear-gradient(135deg, ${currentTenant.primary_color}, #0f172a)`,
-              }}
-            >
+    <div className="min-h-[calc(100vh-5rem)] bg-[#F8FAFC] px-4 py-12 flex items-center justify-center text-[#1E293B]">
+      <div className="mx-auto w-full max-w-5xl grid items-start gap-8 lg:grid-cols-12">
+        {/* Columna Izquierda: Formulario de Autenticación */}
+        <div className="lg:col-span-7">
+          <div className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white shadow-sm">
+            {/* Cabecera limpia y neutral */}
+            <div className="border-b border-[#E2E8F0] bg-[#FAF9F6] px-8 py-6">
               <div className="flex items-center gap-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/15 backdrop-blur-md">
-                  <Layers className="h-6 w-6 text-white" />
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-900 text-white shadow-xs">
+                  <GraduationCap className="h-5 w-5 text-white" />
                 </div>
                 <div>
-                  <span className="text-[11px] font-bold uppercase tracking-widest text-white/80">
-                    Portal de Acceso Marca Blanca
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]">
+                    Campus Virtual • Plataforma Multi-Academia
                   </span>
-                  <h1 className="text-2xl font-extrabold text-white">
-                    {currentTenant.name}
+                  <h1 className="text-xl font-bold text-[#1E293B]">
+                    {authMode === 'login' ? 'Iniciar Sesión' : 'Crear tu Cuenta'}
                   </h1>
                 </div>
               </div>
-              <p className="mt-3 text-xs text-white/85">
-                Dominio activo:{' '}
-                <strong>
-                  {currentTenant.custom_domain || `${currentTenant.slug}.plataformalms.com`}
-                </strong>
+              <p className="mt-2 text-xs text-[#64748B] leading-relaxed">
+                Acceso a tus Academias temáticas con lecciones en alta definición y certificación oficial.
               </p>
             </div>
 
-            <form onSubmit={handleFormSubmit} className="space-y-5 p-8">
+            {/* Pestañas de modo: Iniciar Sesión vs Registro */}
+            <div className="flex border-b border-[#E2E8F0] bg-[#F8FAFC] p-1.5 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode('login');
+                  setFeedback(null);
+                }}
+                className={`flex-1 rounded-lg py-2 transition ${
+                  authMode === 'login'
+                    ? 'bg-white text-[#1E293B] shadow-2xs'
+                    : 'text-[#64748B] hover:text-[#1E293B]'
+                }`}
+              >
+                Ya tengo cuenta (Ingresar)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode('register');
+                  setFeedback(null);
+                }}
+                className={`flex-1 rounded-lg py-2 transition ${
+                  authMode === 'register'
+                    ? 'bg-white text-[#1E293B] shadow-2xs'
+                    : 'text-[#64748B] hover:text-[#1E293B]'
+                }`}
+              >
+                Soy nuevo (Registrarme)
+              </button>
+            </div>
+
+            <form onSubmit={handleFormSubmit} className="space-y-4 p-8">
               {feedback && (
                 <div
-                  className={`flex items-start gap-2.5 rounded-xl border p-3.5 text-xs ${
+                  className={`flex items-start gap-2.5 rounded-xl border p-3.5 text-xs font-semibold ${
                     feedback.ok
-                      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
-                      : 'border-rose-500/40 bg-rose-500/10 text-rose-200'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                      : 'border-rose-200 bg-rose-50 text-rose-800'
                   }`}
                 >
                   {feedback.ok ? (
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 mt-0.5" />
                   ) : (
-                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+                    <AlertCircle className="h-4 w-4 shrink-0 text-rose-600 mt-0.5" />
                   )}
                   <span>{feedback.message}</span>
                 </div>
               )}
 
+              {authMode === 'register' && (
+                <div>
+                  <label className="mb-1.5 block text-xs font-bold text-[#1E293B]">
+                    Nombre Completo
+                  </label>
+                  <div className="relative">
+                    <User className="pointer-events-none absolute left-3.5 top-3 h-4 w-4 text-[#94A3B8]" />
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ej. Juan Pérez"
+                      value={fullName}
+                      onChange={(e) => setFullName(e.target.value)}
+                      className="w-full rounded-xl border border-[#E2E8F0] bg-white py-2.5 pl-10 pr-4 text-xs font-medium text-[#1E293B] placeholder-[#94A3B8] focus:border-slate-800 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              )}
+
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300">
+                <label className="mb-1.5 block text-xs font-bold text-[#1E293B]">
                   Correo Electrónico
                 </label>
-                <div className="relative mt-2">
-                  <Mail className="pointer-events-none absolute left-3.5 top-3 h-4 w-4 text-slate-500" />
+                <div className="relative">
+                  <Mail className="pointer-events-none absolute left-3.5 top-3 h-4 w-4 text-[#94A3B8]" />
                   <input
                     type="email"
+                    required
+                    placeholder="tu@correo.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    required
-                    placeholder="alumno@empresa.com"
-                    className="w-full rounded-xl border border-slate-700 bg-slate-950 py-2.5 pl-10 pr-4 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                    className="w-full rounded-xl border border-[#E2E8F0] bg-white py-2.5 pl-10 pr-4 text-xs font-medium text-[#1E293B] placeholder-[#94A3B8] focus:border-slate-800 focus:outline-none"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300">
+                <label className="mb-1.5 block text-xs font-bold text-[#1E293B]">
                   Contraseña
                 </label>
-                <div className="relative mt-2">
-                  <Lock className="pointer-events-none absolute left-3.5 top-3 h-4 w-4 text-slate-500" />
+                <div className="relative">
+                  <Lock className="pointer-events-none absolute left-3.5 top-3 h-4 w-4 text-[#94A3B8]" />
                   <input
                     type="password"
+                    required
+                    placeholder="••••••••••••"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    required
-                    className="w-full rounded-xl border border-slate-700 bg-slate-950 py-2.5 pl-10 pr-4 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                    className="w-full rounded-xl border border-[#E2E8F0] bg-white py-2.5 pl-10 pr-4 text-xs font-medium text-[#1E293B] placeholder-[#94A3B8] focus:border-slate-800 focus:outline-none"
                   />
                 </div>
               </div>
 
               <button
                 type="submit"
-                className="w-full rounded-xl py-3 text-sm font-bold text-white shadow-lg transition hover:opacity-95"
-                style={{ backgroundColor: currentTenant.primary_color }}
+                disabled={loading}
+                className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 py-3 text-xs font-bold text-white shadow-sm transition hover:bg-slate-800 disabled:opacity-50"
               >
-                Iniciar Sesión en {currentTenant.name}
+                {loading ? (
+                  <span>Procesando...</span>
+                ) : authMode === 'login' ? (
+                  <>
+                    <ShieldCheck className="h-4 w-4" />
+                    Iniciar Sesión en el Campus
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4" />
+                    Crear mi Cuenta y Empezar
+                  </>
+                )}
               </button>
 
-              <div className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-xs text-slate-400">
-                <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-400" />
-                <span>
-                  Protegido por <strong>Control de Sesión Única</strong>: iniciar sesión aquí
-                  cerrará cualquier sesión abierta en otros dispositivos.
+              {/* Indicador de estado Supabase */}
+              <div className="pt-2 text-center">
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[#64748B]">
+                  <Database className="h-3 w-3 text-emerald-600" />
+                  {isSupabaseLive
+                    ? 'Autenticación Conectada en Vivo con Supabase Auth (PostgreSQL)'
+                    : 'Modo Local / Demo Activo (Transición sin fallos)'}
                 </span>
               </div>
             </form>
           </div>
         </div>
 
-        {/* Columna Derecha: Panel de Prueba Rápida de Cuentas y Academias */}
-        <div className="space-y-6 lg:col-span-6">
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
-            <h2 className="text-base font-bold text-white">
-              1. Cambia de Academia para probar el Login Marca Blanca
+        {/* Columna Derecha: Acceso Rápido Demo (1-Clic) */}
+        <div className="lg:col-span-5 space-y-4">
+          <div className="rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-sm">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">
+              Acceso Rápido para Pruebas (1 Clic)
+            </span>
+            <h2 className="mt-1 text-base font-bold text-[#1E293B]">
+              Prueba los 2 Roles de la Plataforma
             </h2>
-            <p className="mt-1 text-xs text-slate-400">
-              Selecciona otra academia y observa cómo el formulario de acceso adopta su marca al instante:
-            </p>
-            <div className="mt-4 grid gap-2.5 sm:grid-cols-3">
-              {tenants.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => selectTenantById(t.id)}
-                  className={`rounded-xl border p-3 text-left transition ${
-                    t.id === currentTenant.id
-                      ? 'border-white/40 bg-slate-800'
-                      : 'border-slate-800 bg-slate-950/60 hover:bg-slate-900'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="h-3 w-3 rounded-full"
-                      style={{ backgroundColor: t.primary_color }}
-                    />
-                    <span className="truncate text-xs font-bold text-white">{t.name}</span>
-                  </div>
-                  <div className="mt-1 truncate text-[11px] text-slate-400">
-                    {t.custom_domain || `${t.slug}.lms.com`}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
-            <h2 className="text-base font-bold text-white">
-              2. Acceso Directo en 1 Clic (Para tus pruebas por Rol)
-            </h2>
-            <p className="mt-1 text-xs text-slate-400">
-              Entra directamente a cualquiera de los 3 paneles o haz clic en un correo para probar el login:
+            <p className="mt-1 text-xs text-[#64748B] leading-relaxed">
+              Selecciona cualquiera de las cuentas de prueba para ingresar instantáneamente:
             </p>
 
             <div className="mt-4 space-y-3">
+              {/* Opción 1: Admin Único */}
               <button
                 type="button"
-                onClick={() => handleQuickRoleAccess('superadmin')}
-                className="flex w-full items-center justify-between rounded-xl border border-amber-500/30 bg-amber-500/10 p-3.5 text-left transition hover:bg-amber-500/20"
+                onClick={() => handleQuickAccess('ceo@plataformalms.com', 'admin')}
+                className="w-full text-left rounded-xl border border-amber-200 bg-amber-50/50 p-3.5 transition hover:bg-amber-50 shadow-2xs"
               >
-                <div className="flex items-center gap-3">
-                  <Crown className="h-5 w-5 text-amber-400" />
-                  <div>
-                    <div className="text-sm font-bold text-white">
-                      Entrar como SuperAdmin (Dueño del SaaS)
-                    </div>
-                    <div className="text-xs text-amber-200/80">
-                      ceo@plataformalms.com • Crea academias y asigna paquetes de licencias
-                    </div>
-                  </div>
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-2 text-xs font-bold text-amber-900">
+                    <Crown className="h-4 w-4 text-amber-700" />
+                    1. Administrador (Dueño Único)
+                  </span>
+                  <span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900">
+                    Panel Admin
+                  </span>
                 </div>
-                <span className="rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-bold text-slate-950">
-                  Abrir Panel
-                </span>
+                <div className="mt-1 text-xs text-[#475569]">
+                  Julio Cerna • <code className="text-[#64748B]">ceo@plataformalms.com</code>
+                </div>
+                <p className="mt-1 text-[11px] text-[#64748B]">
+                  Gestión total del catálogo, subida de videos Bunny.net y configuración de cobros.
+                </p>
               </button>
 
+              {/* Opción 2: Alumna con All-Access */}
               <button
                 type="button"
-                onClick={() => handleQuickRoleAccess('reseller_admin')}
-                className="flex w-full items-center justify-between rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-left transition hover:bg-emerald-500/20"
+                onClick={() => handleQuickAccess('laura.gomez@agencia.co', 'student')}
+                className="w-full text-left rounded-xl border border-indigo-200 bg-indigo-50/40 p-3.5 transition hover:bg-indigo-50/80 shadow-2xs"
               >
-                <div className="flex items-center gap-3">
-                  <Building2 className="h-5 w-5 text-emerald-400" />
-                  <div>
-                    <div className="text-sm font-bold text-white">
-                      Entrar como Reseller Admin ({currentTenant.name})
-                    </div>
-                    <div className="text-xs text-emerald-200/80">
-                      {tenantAdmin?.email} • Personaliza marca y gestiona {currentTenant.used_licenses}/{currentTenant.max_licenses} licencias
-                    </div>
-                  </div>
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-2 text-xs font-bold text-indigo-900">
+                    <Sparkles className="h-4 w-4 text-indigo-700" />
+                    2. Alumna con Pase Total (All-Access)
+                  </span>
+                  <span className="rounded bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-900">
+                    Todas las Academias
+                  </span>
                 </div>
-                <span className="rounded-lg bg-emerald-500 px-2.5 py-1 text-xs font-bold text-slate-950">
-                  Abrir Panel
-                </span>
+                <div className="mt-1 text-xs text-[#475569]">
+                  Laura Gómez • <code className="text-[#64748B]">laura.gomez@agencia.co</code>
+                </div>
+                <p className="mt-1 text-[11px] text-[#64748B]">
+                  Membresía activa con acceso a Excel, Marketing y Finanzas sin restricciones.
+                </p>
               </button>
 
+              {/* Opción 3: Alumno con suscripción individual (Excel) */}
               <button
                 type="button"
-                onClick={() => handleQuickRoleAccess('student')}
-                className="flex w-full items-center justify-between rounded-xl border border-sky-500/30 bg-sky-500/10 p-3.5 text-left transition hover:bg-sky-500/20"
+                onClick={() => handleQuickAccess('andres@closerpro.co', 'student')}
+                className="w-full text-left rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] p-3.5 transition hover:bg-slate-100 shadow-2xs"
               >
-                <div className="flex items-center gap-3">
-                  <GraduationCap className="h-5 w-5 text-sky-400" />
-                  <div>
-                    <div className="text-sm font-bold text-white">
-                      Entrar como Alumno Activo ({currentTenant.name})
-                    </div>
-                    <div className="text-xs text-sky-200/80">
-                      Reproduce clases y prueba el bloqueo de sesión simultánea
-                    </div>
-                  </div>
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-2 text-xs font-bold text-[#1E293B]">
+                    <FileSpreadsheet className="h-4 w-4 text-[#1D4ED8]" />
+                    3. Alumno Individual (Solo Excel)
+                  </span>
+                  <span className="rounded border border-[#E2E8F0] bg-white px-2 py-0.5 text-[10px] font-bold text-[#475569]">
+                    1 Academia
+                  </span>
                 </div>
-                <span className="rounded-lg bg-sky-500 px-2.5 py-1 text-xs font-bold text-slate-950">
-                  Abrir Aula
-                </span>
+                <div className="mt-1 text-xs text-[#475569]">
+                  Andrés Villalba • <code className="text-[#64748B]">andres@closerpro.co</code>
+                </div>
+                <p className="mt-1 text-[11px] text-[#64748B]">
+                  Acceso exclusivo a la Academia de Excel (4 días restantes).
+                </p>
               </button>
-            </div>
-
-            {/* Lista de Alumnos de esta Academia para probar Login de Activos vs Inactivos */}
-            <div className="mt-5 border-t border-slate-800 pt-4">
-              <div className="text-xs font-semibold text-slate-300">
-                Probar correo en el formulario ({currentTenant.name}):
-              </div>
-              <div className="mt-2 space-y-1.5">
-                {tenantStudents.map((stu) => (
-                  <button
-                    key={stu.id}
-                    type="button"
-                    onClick={() => {
-                      setEmail(stu.email);
-                      setFeedback(null);
-                    }}
-                    className="flex w-full items-center justify-between rounded-lg border border-slate-800/80 bg-slate-950/70 px-3 py-2 text-xs hover:border-slate-700"
-                  >
-                    <span className="text-slate-200">
-                      {stu.full_name} (<span className="text-slate-400">{stu.email}</span>)
-                    </span>
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                        stu.is_active
-                          ? 'bg-emerald-500/15 text-emerald-300'
-                          : 'bg-rose-500/15 text-rose-300'
-                      }`}
-                    >
-                      {stu.is_active ? 'Licencia Activa' : 'Inactivo (Bloqueado)'}
-                    </span>
-                  </button>
-                ))}
-              </div>
             </div>
           </div>
         </div>

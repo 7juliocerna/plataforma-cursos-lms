@@ -1,23 +1,17 @@
 'use client';
 
-import React, { useState } from 'react';
+import React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useLMS } from '@/context/LMSContext';
 import {
-  Building2,
   Crown,
   Database,
-  Eye,
-  EyeOff,
   GraduationCap,
-  Layers,
   LogIn,
+  LogOut,
   Palette,
   RotateCcw,
-  ShieldAlert,
-  ShieldCheck,
-  Sparkles,
 } from 'lucide-react';
 
 export function WhiteLabelTopBar() {
@@ -25,278 +19,191 @@ export function WhiteLabelTopBar() {
   const router = useRouter();
   const {
     isSupabaseLive,
-    tenants,
-    currentTenant,
+    academies,
+    currentAcademy,
     currentUser,
-    selectTenantById,
+    selectAcademyById,
     loginAsRole,
-    simulateConcurrentLoginFromOtherDevice,
+    logout,
     resetDemoData,
+    isClassroomFocusMode,
   } = useLMS();
 
-  const isStudentRoute = pathname.startsWith('/student');
-  const [hideSimulatorBar, setHideSimulatorBar] = useState(true);
+  // En Modo Enfoque (reproductor de clases activo), ocultamos la barra global
+  // para cumplir con la ergonomía cognitiva y reduccionismo funcional.
+  if (isClassroomFocusMode) {
+    return null;
+  }
 
-  const handleRoleSwitch = (role: 'superadmin' | 'reseller_admin' | 'student') => {
-    loginAsRole(role, currentTenant.id);
-    if (role === 'superadmin') router.push('/superadmin');
-    if (role === 'reseller_admin') router.push('/reseller');
+  const handleRoleSwitch = (role: 'admin' | 'student') => {
+    loginAsRole(role);
+    if (role === 'admin') router.push('/superadmin');
     if (role === 'student') router.push('/student');
   };
 
-  // Si estamos en /student y el modo "Vista Real Alumno" está activo (por defecto),
-  // ocultamos la barra de arquitecto arriba y dejamos solo un botón flotante discreto abajo a la izquierda
-  const showArchitectBar = !isStudentRoute || !hideSimulatorBar;
-
   return (
-    <>
-      <header className="sticky top-0 z-50 border-b border-slate-800/80 bg-slate-950/95 backdrop-blur-md">
-        {showArchitectBar && (
-          <div className="border-b border-slate-800/70 bg-slate-900/90 px-4 py-2 text-xs">
-            <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
-              {/* Selector de Academia (Marca Blanca en Vivo) */}
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-500/10 px-2.5 py-1 font-medium text-indigo-300 ring-1 ring-indigo-500/30">
-                  <Palette className="h-3.5 w-3.5" />
-                  Academia Activa:
-                </span>
-                <select
-                  aria-label="Seleccionar Academia o Reseller"
-                  value={currentTenant.id}
-                  onChange={(e) => selectTenantById(e.target.value)}
-                  className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs font-medium text-white shadow-sm focus:border-indigo-500 focus:outline-none"
-                >
-                  {tenants.map((tenant) => (
-                    <option key={tenant.id} value={tenant.id}>
-                      {tenant.name} ({tenant.slug}.lms.com • {tenant.used_licenses}/{tenant.max_licenses} licencias)
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Conmutador Rápido de los 3 Roles + Estado Base de Datos */}
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-slate-400">Cambiar vista:</span>
-                <button
-                  type="button"
-                  onClick={() => handleRoleSwitch('superadmin')}
-                  className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-medium transition ${
-                    pathname.startsWith('/superadmin')
-                      ? 'bg-amber-500 text-slate-950 shadow-sm'
-                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                  }`}
-                >
-                  <Crown className="h-3.5 w-3.5" />
-                  1. SuperAdmin
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleRoleSwitch('reseller_admin')}
-                  className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-medium transition ${
-                    pathname.startsWith('/reseller')
-                      ? 'bg-emerald-500 text-slate-950 shadow-sm'
-                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                  }`}
-                >
-                  <Building2 className="h-3.5 w-3.5" />
-                  2. Reseller
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleRoleSwitch('student')}
-                  className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-medium transition ${
-                    pathname.startsWith('/student')
-                      ? 'bg-sky-500 text-slate-950 shadow-sm'
-                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                  }`}
-                >
-                  <GraduationCap className="h-3.5 w-3.5" />
-                  3. Alumno
-                </button>
-
-                <span
-                  className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium ${
-                    isSupabaseLive
-                      ? 'bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30'
-                      : 'bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30'
-                  }`}
-                >
-                  <Database className="h-3 w-3" />
-                  {isSupabaseLive ? 'Supabase Conectado' : 'Modo Demo'}
-                </span>
-
-                <button
-                  type="button"
-                  onClick={resetDemoData}
-                  title="Restaurar datos originales"
-                  className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-[11px] text-slate-400 hover:bg-slate-800 hover:text-white"
-                >
-                  <RotateCcw className="h-3 w-3" />
-                  Reset
-                </button>
-
-                {isStudentRoute && (
-                  <button
-                    type="button"
-                    onClick={() => setHideSimulatorBar(true)}
-                    className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-indigo-500"
-                  >
-                    <EyeOff className="h-3 w-3" />
-                    Ocultar barra admin
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Cabecera Principal Marca Blanca de la Academia Seleccionada */}
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-3.5">
-          <Link href={isStudentRoute ? '/student' : '/'} className="flex items-center gap-3 group">
-            <div
-              className="flex h-10 w-10 items-center justify-center rounded-xl font-bold text-white shadow-lg transition group-hover:scale-105"
-              style={{ backgroundColor: currentTenant.primary_color }}
+    <header className="sticky top-0 z-50 border-b border-[#E2E8F0] bg-white/95 backdrop-blur-md">
+      {/* Barra de control superior para el Administrador / Selector Multi-Marca */}
+      <div className="border-b border-[#E2E8F0] bg-[#F8FAFC] px-4 py-1.5 text-xs text-[#64748B]">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
+          {/* Selector de Subdominio / Academia Temática */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 font-semibold text-[#475569]">
+              <Palette className="h-3.5 w-3.5 text-[#64748B]" />
+              Subdominio Temático:
+            </span>
+            <select
+              aria-label="Seleccionar Subdominio"
+              value={currentAcademy.id}
+              onChange={(e) => selectAcademyById(e.target.value)}
+              className="rounded-lg border border-[#E2E8F0] bg-white px-2.5 py-1 text-xs font-medium text-[#1E293B] shadow-sm transition hover:border-slate-400 focus:outline-none"
             >
-              {currentTenant.logo_url ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={currentTenant.logo_url}
-                  alt={currentTenant.name}
-                  className="h-7 w-7 object-contain"
-                />
-              ) : (
-                <Layers className="h-5 w-5" />
-              )}
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-base font-bold tracking-tight text-white">
-                  {currentTenant.name}
-                </span>
-                <span
-                  className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-white"
-                  style={{ backgroundColor: currentTenant.primary_color }}
-                >
-                  Campus Oficial
-                </span>
-              </div>
-              <p className="text-xs text-slate-400">
-                {currentTenant.custom_domain || `${currentTenant.slug}.plataformalms.com`}
-              </p>
-            </div>
+              {academies.map((academy) => (
+                <option key={academy.id} value={academy.id}>
+                  {academy.slug}.tuacademia.com ({academy.title})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Conmutador Rápido de Roles: Administrador vs Estudiante */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[#64748B] font-medium hidden sm:inline">Vista:</span>
+            <button
+              type="button"
+              onClick={() => handleRoleSwitch('admin')}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+                pathname.startsWith('/superadmin')
+                  ? 'bg-[#1E293B] text-white shadow-sm'
+                  : 'bg-white border border-[#E2E8F0] text-[#475569] hover:bg-[#F1F5F9]'
+              }`}
+            >
+              <Crown className="h-3.5 w-3.5" />
+              Admin Central
+            </button>
+            <button
+              type="button"
+              onClick={() => handleRoleSwitch('student')}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+                pathname.startsWith('/student')
+                  ? 'bg-[#1E293B] text-white shadow-sm'
+                  : 'bg-white border border-[#E2E8F0] text-[#475569] hover:bg-[#F1F5F9]'
+              }`}
+            >
+              <GraduationCap className="h-3.5 w-3.5" />
+              Estudiante
+            </button>
+          </div>
+
+          {/* Estado de Supabase & Reset */}
+          <div className="flex items-center gap-2">
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-medium border ${
+                isSupabaseLive
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-slate-100 text-slate-700 border-slate-200'
+              }`}
+            >
+              <Database className="h-3 w-3" />
+              {isSupabaseLive ? 'Supabase Live' : 'Demo Local'}
+            </span>
+
+            <button
+              type="button"
+              onClick={() => {
+                resetDemoData();
+                window.location.reload();
+              }}
+              title="Restaurar datos iniciales"
+              className="rounded-md border border-[#E2E8F0] bg-white p-1 text-[#64748B] hover:bg-[#F1F5F9] hover:text-[#1E293B]"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Barra Principal de Navegación (Multi-Brand Neutral) */}
+      <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
+        {/* Logotipo Global Consistente con Identidad del Subdominio */}
+        <Link href="/" className="flex items-center gap-3 group">
+          <div
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-white font-extrabold text-sm shadow-sm transition group-hover:opacity-90"
+            style={{ backgroundColor: currentAcademy.primary_color }}
+          >
+            {currentAcademy.title.charAt(0)}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="font-heading font-extrabold text-[#1E293B] text-base tracking-tight">
+              TUACADEMIA
+            </span>
+            <span className="text-[#CBD5E1] font-light">|</span>
+            <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-[#F1F5F9] text-[#475569] border border-[#E2E8F0]">
+              {currentAcademy.slug}
+            </span>
+          </div>
+        </Link>
+
+        {/* Enlaces de Navegación */}
+        <div className="flex items-center gap-3">
+          <Link
+            href="/"
+            className="hidden sm:inline-flex rounded-lg px-3 py-1.5 text-xs font-medium text-[#64748B] hover:bg-[#F1F5F9] hover:text-[#1E293B] transition"
+          >
+            Catálogo
           </Link>
 
-          {/* Si está en modo Vista Real del Alumno, mostramos solo navegación limpia de Alumno */}
-          {isStudentRoute && hideSimulatorBar ? (
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="hidden items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-300 sm:flex">
-                <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-                Licencia Activa • Sesión Única Protegida
-              </div>
+          <Link
+            href="/student"
+            className="rounded-lg px-3 py-1.5 text-xs font-medium text-[#64748B] hover:bg-[#F1F5F9] hover:text-[#1E293B] transition"
+          >
+            Mi Aula Virtual
+          </Link>
 
-              <div className="flex items-center gap-2.5 rounded-xl border border-slate-800 bg-slate-900/90 px-3.5 py-1.5">
-                <div
-                  className="flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold text-white"
-                  style={{ backgroundColor: currentTenant.primary_color }}
-                >
-                  {(currentUser?.full_name || 'Laura Gómez').charAt(0)}
-                </div>
-                <div className="text-xs">
-                  <div className="font-semibold text-white">
-                    {currentUser?.full_name || 'Laura Gómez'}
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    {currentUser?.email || 'laura.gomez@agencia.co'}
-                  </div>
-                </div>
-              </div>
+          {currentUser?.role === 'admin' && (
+            <Link
+              href="/superadmin"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-1.5 text-xs font-semibold text-[#1E293B] hover:bg-[#F1F5F9] transition"
+            >
+              <Crown className="h-3.5 w-3.5 text-amber-600" />
+              SuperAdmin
+            </Link>
+          )}
 
-              <Link
-                href="/login"
-                className="rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800 hover:text-white"
+          {currentUser ? (
+            <div className="flex items-center gap-2.5 pl-3 border-l border-[#E2E8F0]">
+              <div className="text-right hidden sm:block">
+                <div className="text-xs font-semibold text-[#1E293B] line-clamp-1">
+                  {currentUser.full_name}
+                </div>
+                <span className="text-[10px] text-[#64748B] font-mono">
+                  {currentUser.role === 'admin' ? 'Admin' : currentUser.is_all_access ? 'Pase Total' : 'Alumno'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  logout();
+                  router.push('/login');
+                }}
+                title="Cerrar Sesión"
+                className="rounded-lg border border-[#E2E8F0] bg-white p-2 text-[#64748B] hover:bg-[#F1F5F9] hover:text-rose-600 transition"
               >
-                Salir
-              </Link>
+                <LogOut className="h-4 w-4" />
+              </button>
             </div>
           ) : (
-            /* Navegación completa cuando la barra de arquitecto está visible */
-            <nav className="flex flex-wrap items-center gap-1.5 text-sm">
-              <Link
-                href="/"
-                className={`rounded-lg px-3 py-1.5 font-medium transition ${
-                  pathname === '/'
-                    ? 'bg-slate-800 text-white'
-                    : 'text-slate-300 hover:bg-slate-900 hover:text-white'
-                }`}
-              >
-                Landing Academia
-              </Link>
-              <Link
-                href="/login"
-                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition ${
-                  pathname === '/login'
-                    ? 'bg-slate-800 text-white'
-                    : 'text-slate-300 hover:bg-slate-900 hover:text-white'
-                }`}
-              >
-                <LogIn className="h-4 w-4" />
-                Login
-              </Link>
-              <Link
-                href="/superadmin"
-                className={`rounded-lg px-3 py-1.5 font-medium transition ${
-                  pathname.startsWith('/superadmin')
-                    ? 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40'
-                    : 'text-slate-300 hover:bg-slate-900 hover:text-white'
-                }`}
-              >
-                SuperAdmin
-              </Link>
-              <Link
-                href="/reseller"
-                className={`rounded-lg px-3 py-1.5 font-medium transition ${
-                  pathname.startsWith('/reseller')
-                    ? 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40'
-                    : 'text-slate-300 hover:bg-slate-900 hover:text-white'
-                }`}
-              >
-                Reseller
-              </Link>
-              <Link
-                href="/student"
-                className="inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 font-semibold text-white shadow-sm transition hover:opacity-95"
-                style={{ backgroundColor: currentTenant.primary_color }}
-              >
-                <Sparkles className="h-4 w-4" />
-                Aula del Alumno
-              </Link>
-            </nav>
+            <Link
+              href="/login"
+              className="inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:opacity-90"
+              style={{ backgroundColor: currentAcademy.primary_color }}
+            >
+              <LogIn className="h-3.5 w-3.5" />
+              Ingresar
+            </Link>
           )}
         </div>
-      </header>
-
-      {/* Píldora flotante discreta abajo a la izquierda cuando estás viendo el Portal del Alumno en Modo Real */}
-      {isStudentRoute && hideSimulatorBar && (
-        <div className="fixed bottom-4 left-4 z-50 flex flex-wrap items-center gap-2 rounded-2xl border border-slate-700/80 bg-slate-900/95 p-2 shadow-2xl backdrop-blur-md">
-          <button
-            type="button"
-            onClick={() => setHideSimulatorBar(false)}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-700"
-          >
-            <Eye className="h-3.5 w-3.5 text-indigo-400" />
-            Cambiar Rol / Academia
-          </button>
-          <button
-            type="button"
-            onClick={simulateConcurrentLoginFromOtherDevice}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-rose-500/40 bg-rose-500/15 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/25"
-            title="Simular que alguien más abre la cuenta de este alumno en otro dispositivo"
-          >
-            <ShieldAlert className="h-3.5 w-3.5 text-rose-400" />
-            Probar Doble Sesión
-          </button>
-        </div>
-      )}
-    </>
+      </div>
+    </header>
   );
 }
